@@ -33,8 +33,14 @@ const app = express()
 const PORT = process.env.PORT || 3000
 
 
-app.use(cors())
-app.use (helmet())
+// origin: true reflects whichever site made the request (needed alongside
+// credentials: true — a literal "*" can't be combined with cookies). Set
+// CLIENT_URL to lock this down to just the deployed client's real origin.
+app.use(cors({ origin: process.env.CLIENT_URL || true, credentials: true }))
+// Helmet's default Cross-Origin-Resource-Policy ("same-origin") blocks the
+// browser from reading fetch responses from a different origin — needed
+// here since the client is deployed separately from this API.
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }))
 app.use(cookieParser())
 app.use(express.json())
 

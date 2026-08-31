@@ -6,9 +6,14 @@ const signToken = (user) =>
     expiresIn: process.env.JWT_EXPIRES_IN || "8h",
   });
 
+// "none" is required for the cookie to be sent on a cross-origin request
+// (the deployed client is a different origin than this API) — but "none"
+// is only valid on a secure (HTTPS) cookie, hence both being tied to
+// NODE_ENV === "production" together. Locally, client and server are
+// same-origin via CRA's dev proxy, so "lax" over plain HTTP still works.
 const cookieOptions = {
   httpOnly: true,
-  sameSite: "lax",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   secure: process.env.NODE_ENV === "production",
   maxAge: 8 * 60 * 60 * 1000,
 };
