@@ -9,37 +9,44 @@ import {
   cellText,
 } from "./reportParsing.js";
 
-// Ports cleaning.R's clean_daily_run_productivity, with one hardening the
-// R script doesn't have: a real multi-page export can repeat its two-row
-// header once per printed page, and a later page's "Revenue" column can
-// land in a different position than the first page's (an extra spacer
-// column gets inserted on some pages). cleaning.R locates "Comp"/"Revenue"
-// once for the whole file, which silently misreads later pages when that
-// happens; this re-locates them at every repeated header instead, so each
-// page is read using its own columns.
+// Ports cleaning.R's clean_daily_run_productivity, with hardening the R
+// script doesn't have: a real multi-page export can repeat its two-row
+// header once per printed page, and a later page's "Revenue" column (and,
+// observed on a real export, even the "Run" name column itself — some
+// exports carry a blank leading column A that shifts everything one column
+// right) can land in a different position than the first page's.
+// cleaning.R locates these once for the whole file, which silently
+// misreads later pages, or the whole file, when that happens; this
+// re-locates them at every repeated header instead, so each page/file is
+// read using its own actual columns.
 const cleanDailyRunProductivity = (buffer) => {
   const grid = sheetToGrid(buffer);
 
   // Every occurrence of an exact "Comp" cell marks the start of a new
-  // page's data rows; "Revenue" for that page sits somewhere in the one
-  // or two rows above it (the merged group-header row).
+  // page's data rows; "Revenue" and "Run" for that page sit somewhere in
+  // the one or two rows above it (the merged group-header row).
   const sections = [];
   grid.forEach((line, r) => {
     (line || []).forEach((value, c) => {
       if (!/^\s*Comp\s*$/i.test(cellText(value))) return;
       let revenueCol = null;
+      let runCol = null;
       for (let scanRow = r; scanRow >= Math.max(0, r - 2); scanRow -= 1) {
-        const found = (grid[scanRow] || []).findIndex((v) => /^\s*Revenue\s*$/i.test(cellText(v)));
-        if (found !== -1) {
-          revenueCol = found;
-          break;
+        const scanLine = grid[scanRow] || [];
+        if (revenueCol === null) {
+          const found = scanLine.findIndex((v) => /^\s*Revenue\s*$/i.test(cellText(v)));
+          if (found !== -1) revenueCol = found;
+        }
+        if (runCol === null) {
+          const found = scanLine.findIndex((v) => /^\s*Run\s*$/i.test(cellText(v)));
+          if (found !== -1) runCol = found;
         }
       }
-      if (revenueCol !== null) sections.push({ headerRow: r, completedCol: c, revenueCol });
+      if (revenueCol !== null && runCol !== null) sections.push({ headerRow: r, completedCol: c, revenueCol, runCol });
     });
   });
   if (sections.length === 0) {
-    throw new Error("Could not find the completed trips / revenue time columns.");
+    throw new Error("Could not find the run name / completed trips / revenue time columns.");
   }
 
   const sectionFor = (r) => {
@@ -57,7 +64,8 @@ const cleanDailyRunProductivity = (buffer) => {
 
   for (let r = 0; r < grid.length; r += 1) {
     const line = grid[r] || [];
-    const rawRunName = line[0];
+    const { completedCol, revenueCol, runCol } = sectionFor(r);
+    const rawRunName = line[runCol];
     const parsedDate = parseReportDate(rawRunName);
     if (parsedDate) lastDate = parsedDate;
 
@@ -66,14 +74,12 @@ const cleanDailyRunProductivity = (buffer) => {
       rawRunName === null ||
       rawRunName === undefined ||
       !nameText.includes(",") ||
-      line[1] === null ||
-      line[1] === undefined ||
+      line[runCol + 1] === null ||
+      line[runCol + 1] === undefined ||
       /Summary|Daily Run|Date range/i.test(nameText)
     ) {
       continue;
     }
-
-    const { completedCol, revenueCol } = sectionFor(r);
 
     const commaIndex = nameText.indexOf(",");
     rows.push({
