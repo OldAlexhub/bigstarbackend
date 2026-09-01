@@ -44,6 +44,9 @@ export const getWeeklyAnalytics = async (req, res) => {
     provider: r.provider,
     otp: r.avgOtp,
     shf: r.avgShf,
+    trips: r.totalTrips,
+    meetsOtp: r.meetsOtp,
+    meetsShf: r.meetsShf,
   }));
 
   const targetsMetDistribution = [0, 1, 2, 3, 4, 5, 6].map((n) => ({
@@ -58,6 +61,8 @@ export const getWeeklyAnalytics = async (req, res) => {
     segments: segmented.map((r) => ({ route: r.route, provider: r.provider, composite: r.composite, segment: r.segment })),
     outliers: outliers.filter((r) => r.isOutlier).map((r) => ({ route: r.route, provider: r.provider, madScore: r.madScore })),
     quadrant,
+    otpThresh: kpiSettings.otpThresh,
+    shfThresh: kpiSettings.shfThresh,
     targetsMetDistribution,
   });
 };
@@ -216,5 +221,6 @@ export const getMonthlyAnalytics = async (req, res) => {
     dailySeries,
     rankings: current.rankings,
     summary: current.summary,
+    kpiSettings,
   });
 };

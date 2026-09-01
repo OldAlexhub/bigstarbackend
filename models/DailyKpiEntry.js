@@ -32,6 +32,27 @@ const dailyKpiEntrySchema = new mongoose.Schema(
       min: 0,
       max: 1,
     },
+    // The uploaded Daily Tracker row's own closures/late-event counts —
+    // null means "never given a tracker value" (imported before this field
+    // existed, or entered via the single-row manual endpoints), 0 means
+    // "the tracker reported zero." buildTrackerRows.js only falls back to
+    // these when Deployment has no coverage at all for that route/date;
+    // Deployment stays authoritative whenever it has any record of the day.
+    uploadRouteClosures: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    uploadLateToFirst: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    uploadLateDeploy: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

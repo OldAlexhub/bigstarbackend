@@ -34,7 +34,7 @@ router.use(protect, requireSection("network_success"));
 
 router.get("/kpi-entries", listKpiEntries);
 router.post("/kpi-entries", createKpiEntry);
-router.post("/kpi-entries/preprocess", upload.fields([{ name: "file1" }, { name: "file2" }]), preprocessRawReport);
+router.post("/kpi-entries/preprocess", upload.fields([{ name: "file1" }]), preprocessRawReport);
 router.post("/kpi-entries/import-confirm", confirmKpiEntries);
 router.patch("/kpi-entries/:id", updateKpiEntry);
 router.delete("/kpi-entries/:id", deleteKpiEntry);

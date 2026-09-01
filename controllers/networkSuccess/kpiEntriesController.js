@@ -3,9 +3,19 @@ import Route from "../../models/Route.js";
 import { canAccessDivision } from "../../middleware/access.js";
 import { parseUploadDate, normalizePercent } from "../../utils/kpi/excelDates.js";
 import { buildTrackerRows } from "../../utils/kpi/trackerRows.js";
-import { parseVisionReport } from "../../utils/kpi/parseVisionReport.js";
-import { parseEcolaneReport } from "../../utils/kpi/parseEcolaneReport.js";
+import { parseDailyKpiTrackerReport } from "../../utils/kpi/parseDailyKpiTracker.js";
 import { cleanRunName } from "../../utils/kpi/reportParsing.js";
+import { buildLeadingNumberIndex, resolveRouteCode } from "../../utils/kpi/routeMatching.js";
+import { aggregateUploadRows } from "../../utils/kpi/aggregateUploadRows.js";
+
+const buildRouteByCode = (routes) => {
+  const routeByCode = new Map();
+  for (const r of routes) {
+    routeByCode.set(r.code.trim().toUpperCase(), r);
+    routeByCode.set(cleanRunName(r.code).toUpperCase(), r);
+  }
+  return routeByCode;
+};
 
 // Returns the fully-derived Daily Tracker view (same 13 columns as the
 // workbook: operator/provider/scheduled hours/closures/late events included)
@@ -64,82 +74,78 @@ export const deleteKpiEntry = async (req, res) => {
   res.json({ message: "Entry deleted" });
 };
 
-// Parses a raw operations-system export (Vision: one file; Ecolane: two
-// files joined by driver name) into the same {date, route, actualHours,
-// totalTrips, otpPct} shape the blank template collects, resolves each
-// row's route code against this division, and returns a preview -
-// nothing is saved until confirmKpiEntries is called with the (possibly
-// hand-edited) rows.
+// Parses an uploaded Daily KPI Tracker workbook into {date, route,
+// actualHours, totalTrips, otpPct, routeClosures, lateToFirst, lateDeploy}
+// rows, resolves each row's route code against this division (exact match,
+// falling back to a same-leading-number match for suffix variants that
+// don't have their own Master Run Cuts route), combines any rows that
+// resolve to the same route/date, and returns a preview - nothing is saved
+// until confirmKpiEntries is called with the (possibly hand-edited) rows.
 export const preprocessRawReport = async (req, res) => {
-  const { division, source } = req.body;
+  const { division } = req.body;
   if (!division) return res.status(400).json({ message: "division is required" });
   if (!canAccessDivision(req.user, division)) {
     return res.status(403).json({ message: "No access to this division" });
   }
-  if (source !== "vision" && source !== "ecolane") {
-    return res.status(400).json({ message: 'source must be "vision" or "ecolane"' });
-  }
 
   const file1 = req.files?.file1?.[0];
-  const file2 = req.files?.file2?.[0];
   if (!file1) {
-    return res.status(400).json({
-      message:
-        source === "vision"
-          ? "Upload the Vision Para Operations file."
-          : "Upload the Daily Run Productivity file.",
-    });
-  }
-  if (source === "ecolane" && !file2) {
-    return res.status(400).json({ message: "Upload the Driver Performance file." });
+    return res.status(400).json({ message: "Upload the Daily KPI Tracker file." });
   }
 
   let parsed;
   try {
-    parsed = source === "vision" ? parseVisionReport(file1.buffer) : parseEcolaneReport(file1.buffer, file2.buffer);
+    parsed = parseDailyKpiTrackerReport(file1.buffer);
   } catch (error) {
-    return res.status(400).json({ message: error.message || "Could not read the uploaded file(s)." });
+    return res.status(400).json({ message: error.message || "Could not read the uploaded file." });
   }
 
   // Master Run Cuts route codes in this app keep their "BST" prefix
-  // (e.g. "BST1101", "BST-Standby/4501"), but the raw exports' route/run
-  // names get that prefix stripped during parsing (cleaning.R's
-  // clean_run_name, ported in reportParsing.js) since that's what
-  // distinguishes the route from the rest of the cell text. Index routes
-  // by both their exact code and BST-stripped code so either form matches.
+  // (e.g. "BST1101", "BST-Standby/4501"), but the tracker's Route column
+  // doesn't, since that's what distinguishes the route from the rest of the
+  // cell text. Index routes by both their exact code and BST-stripped code
+  // so either form matches; leadingNumberIndex backs the fallback for
+  // suffix variants (e.g. "1101-B") that have no route of their own.
   const routes = await Route.find({ division });
-  const routeByCode = new Map();
-  for (const r of routes) {
-    routeByCode.set(r.code.trim().toUpperCase(), r);
-    routeByCode.set(cleanRunName(r.code).toUpperCase(), r);
-  }
+  const routeByCode = buildRouteByCode(routes);
+  const leadingNumberIndex = buildLeadingNumberIndex(routes);
 
   const warnings = [...parsed.warnings];
-  const rows = [];
+  const resolvedRows = [];
   for (const row of parsed.rows) {
-    if (row.actualHours === 0 && row.totalTrips === 0 && row.otpPct === 0) {
-      warnings.push(`${row.date}: route "${row.route}" had no hours, trips, or OTP - treated as closed for the day and skipped.`);
+    const result = resolveRouteCode(row.route, routeByCode, leadingNumberIndex);
+    if (result.ambiguous) {
+      const candidateCodes = result.candidates.map((c) => c.code).join(", ");
+      warnings.push(`${row.date}: route "${row.route}" matches more than one route by leading number (${candidateCodes}) - skipped, resolve manually.`);
       continue;
     }
-
-    const routeCode = row.route.trim().toUpperCase();
-    const route = routeByCode.get(routeCode);
-    if (!route) {
+    if (!result.route) {
       warnings.push(`${row.date}: no route "${row.route}" found in this division - skipped.`);
       continue;
     }
-    rows.push({
-      route: route.code,
-      date: row.date,
-      actualHours: Math.round(row.actualHours * 100) / 100,
-      totalTrips: Math.round(row.totalTrips),
-      otpPct: Math.round(row.otpPct * 1000) / 10, // store as 0-100 for the editable preview, same convention as the template
-    });
+    if (result.fuzzy) {
+      warnings.push(`${row.date}: route "${row.route}" matched to existing route "${result.route.code}" by leading route number.`);
+    }
+    resolvedRows.push({ ...row, routeId: result.route._id.toString(), routeCode: result.route.code, sourceRoute: row.route });
   }
+
+  const { rows: aggregated, mergeNotes } = aggregateUploadRows(resolvedRows);
+
+  const rows = aggregated.map((row) => ({
+    route: row.routeCode,
+    date: row.date,
+    actualHours: Math.round(row.actualHours * 100) / 100,
+    totalTrips: Math.round(row.totalTrips),
+    otpPct: Math.round(row.otpPct * 1000) / 10, // store as 0-100 for the editable preview, same convention as the template
+    routeClosures: row.routeClosures,
+    lateToFirst: row.lateToFirst,
+    lateDeploy: row.lateDeploy,
+    mergedFrom: row.mergedFrom,
+  }));
 
   rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.route.localeCompare(b.route)));
 
-  res.json({ rows, warnings });
+  res.json({ rows, warnings, mergeNotes });
 };
 
 // Bulk-upserts reviewed preprocessed rows the same way importKpiEntries
@@ -155,26 +161,37 @@ export const confirmKpiEntries = async (req, res) => {
   }
 
   const routes = await Route.find({ division });
-  const routeByCode = new Map();
-  for (const r of routes) {
-    routeByCode.set(r.code.trim().toUpperCase(), r);
-    routeByCode.set(cleanRunName(r.code).toUpperCase(), r);
-  }
+  const routeByCode = buildRouteByCode(routes);
+  const leadingNumberIndex = buildLeadingNumberIndex(routes);
+
+  // Optional integer field (Route Closures / Late to First / Late Deploy) -
+  // blank/missing means "no value given" (null), not 0.
+  const parseOptionalCount = (value) => {
+    if (value === undefined || value === null || value === "") return { value: null, valid: true };
+    const num = typeof value === "number" ? value : parseFloat(value);
+    return Number.isFinite(num) && num >= 0 ? { value: Math.round(num), valid: true } : { value: null, valid: false };
+  };
 
   const errors = [];
-  const parsed = [];
+  const resolvedRows = [];
 
   rows.forEach((row, i) => {
     const rowNum = i + 1;
-    const routeCode = String(row.route ?? "").trim().toUpperCase();
-    const route = routeByCode.get(routeCode) || routeByCode.get(cleanRunName(routeCode).toUpperCase());
+    const routeText = String(row.route ?? "").trim();
+    const routeResult = routeText ? resolveRouteCode(routeText, routeByCode, leadingNumberIndex) : { route: null };
     const date = parseUploadDate(row.date);
     const actualHours = typeof row.actualHours === "number" ? row.actualHours : parseFloat(row.actualHours);
     const totalTrips = typeof row.totalTrips === "number" ? row.totalTrips : parseFloat(row.totalTrips);
     const otpPct = normalizePercent(row.otpPct);
+    const routeClosures = parseOptionalCount(row.routeClosures);
+    const lateToFirst = parseOptionalCount(row.lateToFirst);
+    const lateDeploy = parseOptionalCount(row.lateDeploy);
 
-    if (!routeCode) errors.push(`Row ${rowNum}: Route is required`);
-    else if (!route) errors.push(`Row ${rowNum}: unknown route "${row.route}" for this division`);
+    if (!routeText) errors.push(`Row ${rowNum}: Route is required`);
+    else if (routeResult.ambiguous) {
+      const candidateCodes = routeResult.candidates.map((c) => c.code).join(", ");
+      errors.push(`Row ${rowNum}: route "${row.route}" matches more than one route by leading number (${candidateCodes})`);
+    } else if (!routeResult.route) errors.push(`Row ${rowNum}: unknown route "${row.route}" for this division`);
     if (!date) errors.push(`Row ${rowNum}: invalid or missing Date`);
     if (!Number.isFinite(actualHours) || actualHours < 0)
       errors.push(`Row ${rowNum}: Actual Service Hours must be a number ≥ 0`);
@@ -182,9 +199,34 @@ export const confirmKpiEntries = async (req, res) => {
       errors.push(`Row ${rowNum}: Total Trips must be a number ≥ 0`);
     if (otpPct === null || otpPct < 0 || otpPct > 1)
       errors.push(`Row ${rowNum}: OTP % must be between 0 and 100 (or 0 and 1)`);
+    if (!routeClosures.valid) errors.push(`Row ${rowNum}: Route Closures must be a number ≥ 0`);
+    if (!lateToFirst.valid) errors.push(`Row ${rowNum}: Late to First must be a number ≥ 0`);
+    if (!lateDeploy.valid) errors.push(`Row ${rowNum}: Late Deploy must be a number ≥ 0`);
 
-    if (date && route && Number.isFinite(actualHours) && Number.isFinite(totalTrips) && otpPct !== null) {
-      parsed.push({ date, route: route._id, actualHours, totalTrips, otpPct });
+    if (
+      date &&
+      routeResult.route &&
+      Number.isFinite(actualHours) &&
+      Number.isFinite(totalTrips) &&
+      otpPct !== null &&
+      routeClosures.valid &&
+      lateToFirst.valid &&
+      lateDeploy.valid
+    ) {
+      resolvedRows.push({
+        date,
+        routeId: routeResult.route._id.toString(),
+        routeCode: routeResult.route.code,
+        sourceRoute: routeText,
+        actualHours,
+        totalTrips,
+        otpPct,
+        // A blank cell means 0, same convention as the parser - null is
+        // reserved for entries this whole import flow never touched at all.
+        routeClosures: routeClosures.value ?? 0,
+        lateToFirst: lateToFirst.value ?? 0,
+        lateDeploy: lateDeploy.value ?? 0,
+      });
     }
   });
 
@@ -196,12 +238,29 @@ export const confirmKpiEntries = async (req, res) => {
     });
   }
 
+  // Guards against two hand-edited preview rows sharing the same route/date
+  // (DailyKpiEntry's unique index allows only one entry per route/day) -
+  // without this, the second upsert below would silently overwrite the
+  // first instead of combining them.
+  const { rows: parsed } = aggregateUploadRows(resolvedRows);
+
   let created = 0;
   let updated = 0;
   for (const row of parsed) {
     const result = await DailyKpiEntry.findOneAndUpdate(
-      { division, route: row.route, date: row.date },
-      { ...row, division, updatedBy: req.user._id },
+      { division, route: row.routeId, date: row.date },
+      {
+        division,
+        route: row.routeId,
+        date: row.date,
+        actualHours: row.actualHours,
+        totalTrips: row.totalTrips,
+        otpPct: row.otpPct,
+        uploadRouteClosures: row.routeClosures,
+        uploadLateToFirst: row.lateToFirst,
+        uploadLateDeploy: row.lateDeploy,
+        updatedBy: req.user._id,
+      },
       { upsert: true, new: true, rawResult: true, setDefaultsOnInsert: true }
     );
     if (result.lastErrorObject?.updatedExisting) updated += 1;

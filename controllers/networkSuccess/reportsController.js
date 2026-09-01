@@ -39,7 +39,7 @@ export const getEodBrief = async (req, res) => {
   const priorWeekRows = await buildTrackerRows(divisionId, addDays(cutoff, -7), addDays(cutoff, -7));
 
   const dayOfWeek = DAYS_OF_WEEK[cutoff.getUTCDay()];
-  const templateRoutes = await RunCut.find({ division: divisionId, dayOfWeek }).populate("route", "code");
+  const templateRoutes = await RunCut.find({ division: divisionId, daysOfWeek: dayOfWeek }).populate("route", "code");
   const plannedFamilies = new Set(templateRoutes.map((rc) => normalizeRouteGroup(rc.route?.code)));
 
   const operatedFamilies = new Set(
@@ -210,6 +210,7 @@ export const getProviderCheckIn = async (req, res) => {
     operatorRows,
     weeklySummary,
     coachingPlan,
+    kpiSettings,
   });
 };
 

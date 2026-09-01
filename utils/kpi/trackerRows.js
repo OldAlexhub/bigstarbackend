@@ -52,6 +52,13 @@ export const buildTrackerRows = async (division, from, to) => {
       const routeSource = entry.route.code;
       const route = normalizeRouteGroup(routeSource);
 
+      // Deployment is the authoritative source for closures/late events
+      // whenever it has any record of this route/date at all (a RunCutDay
+      // exists) - only fall back to the uploaded tracker's own reported
+      // values when Deployment has no coverage whatsoever for the day, not
+      // merely when it recorded zero incidents.
+      const hasDeploymentCoverage = Boolean(rcd);
+
       return {
         entryId: entry._id.toString(),
         date: dateKey(entry.date),
@@ -63,9 +70,10 @@ export const buildTrackerRows = async (division, from, to) => {
         actualHrs: entry.actualHours,
         totalTrips: entry.totalTrips,
         otpPct: entry.otpPct,
-        routeClosures: Math.max(statusClosure, issueClosures),
-        lateToFirst: bucket["Late to First"] || 0,
-        lateDeploy: bucket["Late Deploy"] || 0,
+        routeClosures: hasDeploymentCoverage ? Math.max(statusClosure, issueClosures) : entry.uploadRouteClosures ?? 0,
+        lateToFirst: hasDeploymentCoverage ? bucket["Late to First"] || 0 : entry.uploadLateToFirst ?? 0,
+        lateDeploy: hasDeploymentCoverage ? bucket["Late Deploy"] || 0 : entry.uploadLateDeploy ?? 0,
+        closuresSource: hasDeploymentCoverage ? "deployment" : "upload",
         kpiKey: `${providerName.toLowerCase()}|${route.toLowerCase()}`,
       };
     });

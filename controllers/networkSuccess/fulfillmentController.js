@@ -30,7 +30,7 @@ export const getFulfillmentBrain = async (req, res) => {
   const target = targetPct ? Number(targetPct) : 0.95;
   const kpiSettings = await getEffectiveKpiSettings(division);
 
-  const runCuts = await RunCut.find({ division: divisionId, dayOfWeek: { $in: selectedDays } })
+  const runCuts = await RunCut.find({ division: divisionId, daysOfWeek: { $in: selectedDays } })
     .populate("route", "code")
     .populate("operator", "name active");
 
@@ -38,17 +38,21 @@ export const getFulfillmentBrain = async (req, res) => {
   for (const rc of runCuts) {
     if (!rc.route) continue;
     const family = normalizeRouteGroup(rc.route.code);
-    const key = `${rc.dayOfWeek}|${family}`;
     const hours = durationHours(rc.startTime, rc.endTime);
     const revenueHours = Math.max(hours - kpiSettings.revenueHourDeduction, 0) * kpiSettings.revenueHourMultiplier;
     const isActive = rc.operator?.active ?? false;
 
-    if (!dutyMap.has(key)) {
-      dutyMap.set(key, { dayOfWeek: rc.dayOfWeek, route: family, covered: false, hours: 0 });
+    // One RunCut can cover several of the selected days at once (daysOfWeek
+    // is an array) - each matched day is its own duty needing coverage.
+    for (const day of rc.daysOfWeek.filter((d) => selectedDays.includes(d))) {
+      const key = `${day}|${family}`;
+      if (!dutyMap.has(key)) {
+        dutyMap.set(key, { dayOfWeek: day, route: family, covered: false, hours: 0 });
+      }
+      const duty = dutyMap.get(key);
+      duty.hours = Math.max(duty.hours, revenueHours);
+      if (isActive) duty.covered = true;
     }
-    const duty = dutyMap.get(key);
-    duty.hours = Math.max(duty.hours, revenueHours);
-    if (isActive) duty.covered = true;
   }
 
   const duties = Array.from(dutyMap.values());
@@ -77,17 +81,19 @@ export const getFulfillmentBrain = async (req, res) => {
   // hours activating them would add, highest first.
   const inactiveCandidates = runCuts
     .filter((rc) => rc.operator && rc.operator.active === false && rc.route)
-    .map((rc) => {
+    .flatMap((rc) => {
       const family = normalizeRouteGroup(rc.route.code);
       const hours = durationHours(rc.startTime, rc.endTime);
       const revenueHours = Math.max(hours - kpiSettings.revenueHourDeduction, 0) * kpiSettings.revenueHourMultiplier;
-      return {
-        operatorId: rc.operator._id,
-        operatorName: rc.operator.name,
-        route: family,
-        dayOfWeek: rc.dayOfWeek,
-        addedHours: Math.round(revenueHours * 100) / 100,
-      };
+      return rc.daysOfWeek
+        .filter((d) => selectedDays.includes(d))
+        .map((day) => ({
+          operatorId: rc.operator._id,
+          operatorName: rc.operator.name,
+          route: family,
+          dayOfWeek: day,
+          addedHours: Math.round(revenueHours * 100) / 100,
+        }));
     })
     .sort((a, b) => b.addedHours - a.addedHours);
 
