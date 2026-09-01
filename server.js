@@ -15,6 +15,7 @@ import trackerRoutes from "./routes/trackerRoutes.js"
 import settingsRoutes from "./routes/settingsRoutes.js"
 import dailyIssuesRoutes from "./routes/dailyIssuesRoutes.js"
 import reportsRoutes from "./routes/reportsRoutes.js"
+import deploymentActivityRoutes from "./routes/deploymentActivityRoutes.js"
 import providersRoutes from "./routes/providersRoutes.js"
 import homeSummaryRoutes from "./routes/homeSummaryRoutes.js"
 import eltReportingRoutes from "./routes/eltReportingRoutes.js"
@@ -57,6 +58,7 @@ app.use("/api/tracker", trackerRoutes)
 app.use("/api/settings", settingsRoutes)
 app.use("/api/daily-issues", dailyIssuesRoutes)
 app.use("/api/reports", reportsRoutes)
+app.use("/api/deployment-activity", deploymentActivityRoutes)
 app.use("/api/providers", providersRoutes)
 app.use("/api/home-summary", homeSummaryRoutes)
 app.use("/api/elt-reporting", eltReportingRoutes)

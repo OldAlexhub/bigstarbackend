@@ -6,12 +6,15 @@ import { computeHours } from "../utils/hours.js";
 import { getEffectiveThresholds } from "../utils/thresholds.js";
 import { syncAutoIssuesBulk } from "../utils/autoIssueSync.js";
 import { OSR_DISRUPTION_TYPE } from "../utils/disruptionTypes.js";
+import { logDeploymentActivity } from "../utils/deploymentActivityLog.js";
 import {
   resolveOperator,
   resolveVehicle,
   resolveRoute,
   findOperatorConflictOnDate,
 } from "../utils/resolveAssignment.js";
+
+const isoDate = (date) => new Date(date).toISOString().slice(0, 10);
 
 const populateRunCutDay = (query) =>
   query
@@ -53,7 +56,7 @@ export const listRunCutDays = async (req, res) => {
 // route it's covering isn't useful, so coveringRoute is required whenever
 // deployed is being set to true, and is always cleared when set to false.
 export const setRunCutDayDeployed = async (req, res) => {
-  const runCutDay = await RunCutDay.findById(req.params.id).populate("route", "type");
+  const runCutDay = await RunCutDay.findById(req.params.id).populate("route", "code type");
   if (!runCutDay) return res.status(404).json({ message: "Run cut day not found" });
   if (!canAccessDivision(req.user, runCutDay.division)) {
     return res.status(403).json({ message: "No access to this division" });
@@ -63,6 +66,7 @@ export const setRunCutDayDeployed = async (req, res) => {
   }
 
   const deployed = Boolean(req.body.deployed);
+  let coveringRouteCode = null;
   if (deployed) {
     const { coveringRoute } = req.body;
     if (!coveringRoute) {
@@ -71,6 +75,7 @@ export const setRunCutDayDeployed = async (req, res) => {
     const routeDoc = await Route.findOne({ _id: coveringRoute, division: runCutDay.division });
     if (!routeDoc) return res.status(400).json({ message: "That route isn't in this division." });
     runCutDay.coveringRoute = routeDoc._id;
+    coveringRouteCode = routeDoc.code;
   } else {
     runCutDay.coveringRoute = null;
   }
@@ -78,6 +83,16 @@ export const setRunCutDayDeployed = async (req, res) => {
   runCutDay.deployed = deployed;
   runCutDay.updatedBy = req.user._id;
   await runCutDay.save();
+
+  logDeploymentActivity({
+    division: runCutDay.division,
+    user: req.user,
+    action: "runcutday.deployed_set",
+    summary: deployed
+      ? `Marked standby ${runCutDay.route.code} deployed on ${isoDate(runCutDay.date)} (covering ${coveringRouteCode})`
+      : `Marked standby ${runCutDay.route.code} not deployed on ${isoDate(runCutDay.date)}`,
+  });
+
   const populated = await populateRunCutDay(RunCutDay.findById(runCutDay._id));
   res.json({ runCutDay: populated });
 };
@@ -89,25 +104,29 @@ export const setRunCutDayDeployed = async (req, res) => {
 // persistent RunCut assignment says. Operator/Vehicle/Pullout/Times are not
 // editable here — those are Master Run Cuts' to manage.
 export const updateRunCutDayException = async (req, res) => {
-  const runCutDay = await RunCutDay.findById(req.params.id);
+  const runCutDay = await RunCutDay.findById(req.params.id).populate("route", "code");
   if (!runCutDay) return res.status(404).json({ message: "Run cut day not found" });
   if (!canAccessDivision(req.user, runCutDay.division)) {
     return res.status(403).json({ message: "No access to this division" });
   }
 
   const { status, clientNotes, disruptionType, disruptionNotes } = req.body;
+  const changeDescriptions = [];
   if (status !== undefined) {
     runCutDay.status = status;
     runCutDay.overrides.status = true;
+    changeDescriptions.push(`status to ${status}`);
   }
   if (clientNotes !== undefined) {
     runCutDay.clientNotes = clientNotes;
     runCutDay.overrides.clientNotes = true;
+    changeDescriptions.push("client notes");
   }
   if (disruptionType !== undefined || disruptionNotes !== undefined) {
     if (disruptionType !== undefined) runCutDay.disruptionType = disruptionType;
     if (disruptionNotes !== undefined) runCutDay.disruptionNotes = disruptionNotes;
     runCutDay.overrides.disruption = true;
+    changeDescriptions.push(`disruption to ${disruptionType ?? runCutDay.disruptionType ?? "—"}`);
   }
 
   const divisionDoc = status !== undefined ? await Division.findById(runCutDay.division) : null;
@@ -125,6 +144,15 @@ export const updateRunCutDayException = async (req, res) => {
 
   runCutDay.updatedBy = req.user._id;
   await runCutDay.save();
+
+  if (changeDescriptions.length) {
+    logDeploymentActivity({
+      division: runCutDay.division,
+      user: req.user,
+      action: "runcutday.exception_updated",
+      summary: `Updated ${runCutDay.route.code} on ${isoDate(runCutDay.date)}: set ${changeDescriptions.join(", ")}`,
+    });
+  }
 
   const affected = [runCutDay];
 
@@ -155,6 +183,13 @@ export const updateRunCutDayException = async (req, res) => {
       tomorrowDay.updatedBy = req.user._id;
       await tomorrowDay.save();
       affected.push(tomorrowDay);
+
+      logDeploymentActivity({
+        division: tomorrowDay.division,
+        user: req.user,
+        action: "runcutday.exception_updated",
+        summary: `Auto-suspended ${runCutDay.route.code} on ${isoDate(tomorrowDay.date)} (OSR follow-through from ${isoDate(runCutDay.date)})`,
+      });
     }
   }
 
@@ -223,12 +258,19 @@ export const createExtraRunCutDay = async (req, res) => {
     throw error;
   }
 
+  logDeploymentActivity({
+    division,
+    user: req.user,
+    action: "runcutday.extra_added",
+    summary: `Added extra run for ${route.code} on ${isoDate(dayDate)}${operatorName ? ` (operator: ${operatorName})` : ""}`,
+  });
+
   const populated = await populateRunCutDay(RunCutDay.findById(runCutDay._id));
   res.status(201).json({ runCutDay: populated });
 };
 
 export const deleteExtraRunCutDay = async (req, res) => {
-  const runCutDay = await RunCutDay.findById(req.params.id);
+  const runCutDay = await RunCutDay.findById(req.params.id).populate("route", "code");
   if (!runCutDay) return res.status(404).json({ message: "Run cut day not found" });
   if (!canAccessDivision(req.user, runCutDay.division)) {
     return res.status(403).json({ message: "No access to this division" });
@@ -236,6 +278,14 @@ export const deleteExtraRunCutDay = async (req, res) => {
   if (!runCutDay.isExtra) {
     return res.status(400).json({ message: "Only an extra duty added here can be removed this way." });
   }
+
+  logDeploymentActivity({
+    division: runCutDay.division,
+    user: req.user,
+    action: "runcutday.extra_removed",
+    summary: `Removed extra run for ${runCutDay.route.code} on ${isoDate(runCutDay.date)}`,
+  });
+
   await runCutDay.deleteOne();
   res.json({ message: "Extra duty removed" });
 };

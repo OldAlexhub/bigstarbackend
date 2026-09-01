@@ -2,6 +2,7 @@ import XLSX from "xlsx";
 import DailyIssueLog from "../models/DailyIssueLog.js";
 import Division from "../models/Division.js";
 import { canAccessDivision } from "../middleware/access.js";
+import { logDeploymentActivity } from "../utils/deploymentActivityLog.js";
 
 const REPORT_HEADERS = ["Date", "Route", "Operator", "Disruption", "Notes"];
 const toISODate = (date) => new Date(date).toISOString().slice(0, 10);
@@ -71,6 +72,14 @@ export const createDailyIssue = async (req, res) => {
     { path: "route", select: "code" },
     { path: "operator", select: "name" },
   ]);
+
+  logDeploymentActivity({
+    division,
+    user: req.user,
+    action: "issue.created",
+    summary: `Logged "${disruptionType}" for ${issue.route?.code || "no route"} on ${toISODate(date)}`,
+  });
+
   res.status(201).json({ issue });
 };
 
@@ -104,6 +113,14 @@ export const updateDailyIssue = async (req, res) => {
     { path: "route", select: "code" },
     { path: "operator", select: "name" },
   ]);
+
+  logDeploymentActivity({
+    division: issue.division,
+    user: req.user,
+    action: "issue.updated",
+    summary: `Updated "${issue.disruptionType}" for ${issue.route?.code || "no route"} on ${toISODate(issue.date)}`,
+  });
+
   res.json({ issue });
 };
 
@@ -155,7 +172,7 @@ export const exportDailyIssues = async (req, res) => {
 };
 
 export const deleteDailyIssue = async (req, res) => {
-  const issue = await DailyIssueLog.findById(req.params.id);
+  const issue = await DailyIssueLog.findById(req.params.id).populate("route", "code");
   if (!issue) return res.status(404).json({ message: "Issue not found" });
   if (!canAccessDivision(req.user, issue.division)) {
     return res.status(403).json({ message: "No access to this division" });
@@ -165,6 +182,13 @@ export const deleteDailyIssue = async (req, res) => {
       message: "This entry is auto-synced from the route's live status — change it from Deployment's Live Schedule instead.",
     });
   }
+
+  logDeploymentActivity({
+    division: issue.division,
+    user: req.user,
+    action: "issue.deleted",
+    summary: `Deleted "${issue.disruptionType}" for ${issue.route?.code || "no route"} on ${toISODate(issue.date)}`,
+  });
 
   await issue.deleteOne();
   res.json({ message: "Issue deleted" });
