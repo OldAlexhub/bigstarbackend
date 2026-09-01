@@ -1,7 +1,9 @@
 import RunCut from "../../models/RunCut.js";
+import Division from "../../models/Division.js";
 import { DAYS_OF_WEEK } from "../hours.js";
 import { normalizeRouteGroup } from "./routeFamily.js";
 import { dateKey, rowKey } from "./rowKeys.js";
+import { todayInTimezone } from "../timezone.js";
 
 const isoDatesInRange = (from, to) => {
   const dates = [];
@@ -32,13 +34,19 @@ const isoDatesInRange = (from, to) => {
 //      old enough to predate any RunCutDay ever being generated.
 // A route whose resolved scheduled hours come out to 0 (e.g. a RunCut
 // that's persistently marked "off") isn't synthesized at all - there's
-// nothing to be "closed" against.
+// nothing to be "closed" against. Nor is a date later than the division's
+// own "today" (in its own timezone) - a day that hasn't happened yet can't
+// be "closed," it just doesn't have data yet.
 export const findScheduleGaps = async ({ division, from, to, coveredKeys, runCutDayMap }) => {
-  const runCuts = await RunCut.find({ division })
-    .populate("route", "code")
-    .populate({ path: "operator", populate: { path: "provider", select: "name" } });
+  const [runCuts, divisionDoc] = await Promise.all([
+    RunCut.find({ division })
+      .populate("route", "code")
+      .populate({ path: "operator", populate: { path: "provider", select: "name" } }),
+    Division.findById(division),
+  ]);
 
-  const dates = isoDatesInRange(from, to);
+  const today = todayInTimezone(divisionDoc?.timezone);
+  const dates = isoDatesInRange(from, to).filter((d) => d <= today);
   const gaps = [];
 
   for (const rc of runCuts) {
