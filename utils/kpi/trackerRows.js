@@ -2,9 +2,8 @@ import DailyKpiEntry from "../../models/DailyKpiEntry.js";
 import RunCutDay from "../../models/RunCutDay.js";
 import DailyIssueLog from "../../models/DailyIssueLog.js";
 import { normalizeRouteGroup } from "./routeFamily.js";
-
-const dateKey = (date) => new Date(date).toISOString().slice(0, 10);
-const rowKey = (routeId, date) => `${routeId}|${dateKey(date)}`;
+import { findScheduleGaps } from "./scheduleGaps.js";
+import { dateKey, rowKey } from "./rowKeys.js";
 
 // The "derive, don't re-enter" merge: joins the minimal uploaded KPI entries
 // (date, route, actual hours, total trips, OTP%) against Master Run Cuts
@@ -37,27 +36,33 @@ export const buildTrackerRows = async (division, from, to) => {
     bucket[issue.disruptionType] = (bucket[issue.disruptionType] || 0) + 1;
   }
 
-  return entries
+  const uploadedRows = entries
     .filter((entry) => entry.route)
     .map((entry) => {
       const key = rowKey(entry.route._id, entry.date);
       const rcd = runCutDayMap.get(key);
       const bucket = issueCounts.get(key) || {};
 
-      const operatorName = rcd?.operator?.name || "Unassigned";
-      const providerName = rcd?.operator?.provider?.name || "Unassigned";
       const statusClosure = rcd?.status === "suspended" ? 1 : 0;
       const issueClosures = (bucket["Unperformed Duty"] || 0) + (bucket["Route Closed"] || 0);
 
       const routeSource = entry.route.code;
       const route = normalizeRouteGroup(routeSource);
 
-      // Deployment is the authoritative source for closures/late events
-      // whenever it has any record of this route/date at all (a RunCutDay
-      // exists) - only fall back to the uploaded tracker's own reported
-      // values when Deployment has no coverage whatsoever for the day, not
-      // merely when it recorded zero incidents.
+      // Deployment is the authoritative source for closures/late events/
+      // scheduled hours/operator/provider whenever it has any record of
+      // this route/date at all (a RunCutDay exists) - only fall back to the
+      // uploaded tracker's own reported values when Deployment has no
+      // coverage whatsoever for the day (e.g. historical dates from before
+      // the route existed in Master Run Cuts), not merely when it recorded
+      // zero incidents or has no operator assigned yet.
       const hasDeploymentCoverage = Boolean(rcd);
+      const operatorName = hasDeploymentCoverage
+        ? rcd?.operator?.name || "Unassigned"
+        : entry.uploadOperator || "Unassigned";
+      const providerName = hasDeploymentCoverage
+        ? rcd?.operator?.provider?.name || "Unassigned"
+        : entry.uploadProvider || "Unassigned";
 
       return {
         entryId: entry._id.toString(),
@@ -66,7 +71,7 @@ export const buildTrackerRows = async (division, from, to) => {
         provider: providerName,
         route,
         routeSource,
-        schedHrs: rcd?.serviceHours ?? 0,
+        schedHrs: hasDeploymentCoverage ? rcd.serviceHours ?? 0 : entry.uploadSchedHours ?? 0,
         actualHrs: entry.actualHours,
         totalTrips: entry.totalTrips,
         otpPct: entry.otpPct,
@@ -77,4 +82,14 @@ export const buildTrackerRows = async (division, from, to) => {
         kpiKey: `${providerName.toLowerCase()}|${route.toLowerCase()}`,
       };
     });
+
+  // A route that was actually scheduled to run on a given day but has no
+  // DailyKpiEntry at all - not "reported closed," genuinely absent from the
+  // data - counts as a full closure against fulfillment (0 actual/revenue
+  // hours against its real scheduled hours), the same way a real closure
+  // does, instead of silently vanishing from every ranking and average.
+  const coveredKeys = new Set(entries.filter((e) => e.route).map((e) => rowKey(e.route._id, e.date)));
+  const gapRows = await findScheduleGaps({ division, from, to, coveredKeys, runCutDayMap });
+
+  return [...uploadedRows, ...gapRows];
 };

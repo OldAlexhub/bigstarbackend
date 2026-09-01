@@ -30,6 +30,8 @@ export const aggregateUploadRows = (resolvedRows) => {
         ? group.reduce((s, r) => s + r.otpPct * r.totalTrips, 0) / totalTrips
         : group.reduce((s, r) => s + r.otpPct, 0) / group.length; // all-zero-trips fallback: plain mean
 
+    const schedHoursValues = group.map((r) => r.schedHours).filter((v) => v != null);
+
     rows.push({
       ...group[0],
       actualHours: Math.round(group.reduce((s, r) => s + r.actualHours, 0) * 100) / 100,
@@ -38,6 +40,9 @@ export const aggregateUploadRows = (resolvedRows) => {
       routeClosures: group.reduce((s, r) => s + r.routeClosures, 0),
       lateToFirst: group.reduce((s, r) => s + r.lateToFirst, 0),
       lateDeploy: group.reduce((s, r) => s + r.lateDeploy, 0),
+      schedHours: schedHoursValues.length ? Math.round(schedHoursValues.reduce((s, v) => s + v, 0) * 100) / 100 : null,
+      provider: group.map((r) => r.provider).find((p) => p != null) ?? null,
+      operator: group.map((r) => r.operator).find((o) => o != null) ?? null,
       mergedFrom: group.map((r) => r.sourceRoute),
     });
     mergeNotes.push(

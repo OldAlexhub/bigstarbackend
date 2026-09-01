@@ -53,6 +53,31 @@ const dailyKpiEntrySchema = new mongoose.Schema(
       default: null,
       min: 0,
     },
+    // Same fallback story as the three fields above, but for Scheduled
+    // Hours (SHF's denominator) — schedHrs otherwise comes exclusively from
+    // RunCutDay.serviceHours, which only ever covers "today forward" (past
+    // dates are never generated), so imported historical data would
+    // otherwise show SHF as permanently unreadable.
+    uploadSchedHours: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    // Same fallback story again, for the Provider display name — matched
+    // against the real Provider collection when possible (canonical name
+    // used), otherwise kept as-is from the upload rather than dropped.
+    uploadProvider: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    // Same fallback story again, for the Operator display name — matched
+    // against the real Operator collection when possible.
+    uploadOperator: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

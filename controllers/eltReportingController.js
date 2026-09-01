@@ -9,6 +9,7 @@ import { addDays, emptyMetrics, accumulate, coveragePct, runCutFulfillmentPct } 
 import { buildTrackerRows } from "../utils/kpi/trackerRows.js";
 import { routeDailyData, computeRankings } from "../utils/kpi/rankings.js";
 import { getEffectiveKpiSettings } from "../utils/kpi/settings.js";
+import { pdfPageLeft, drawPdfTable } from "../utils/pdfTable.js";
 
 const iso = (d) => new Date(d).toISOString().slice(0, 10);
 const round2 = (n) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 100) / 100);
@@ -366,49 +367,8 @@ export const exportEltReport = async (req, res) => {
   doc.fontSize(11).fillColor("#666").text(`${report.from} to ${report.to}`);
   doc.moveDown();
 
-  // doc.x does NOT reset to the page's left margin after an explicit-
-  // position .text(str, x, y, {...}) call — it's left at wherever that call
-  // drew, which drifted every subsequent table further right off the page.
-  // Always anchor tables to the real margin instead of trusting doc.x.
-  const pageLeft = doc.page.margins.left;
-
-  const rowHeight = (cells, colWidths, fontSize) =>
-    Math.max(...cells.map((c, i) => doc.heightOfString(String(c ?? ""), { width: colWidths[i] }))) + fontSize * 0.6;
-
-  const drawRow = (cells, colWidths, startX, y, fontSize) => {
-    cells.forEach((c, i) => {
-      doc.text(String(c ?? ""), startX + colWidths.slice(0, i).reduce((a, b) => a + b, 0), y, { width: colWidths[i] });
-    });
-  };
-
-  const drawTable = (title, headers, tableRows, colWidths) => {
-    doc.x = pageLeft;
-    doc.fillColor("#000").fontSize(13).text(title, pageLeft, doc.y);
-    doc.moveDown(0.3);
-    const startX = pageLeft;
-    let y = doc.y;
-
-    doc.fontSize(8).fillColor("#333");
-    const headerHeight = rowHeight(headers, colWidths, 8);
-    drawRow(headers, colWidths, startX, y, 8);
-    y += headerHeight;
-
-    doc.fontSize(9).fillColor("#000");
-    if (tableRows.length === 0) {
-      doc.text("None", startX, y);
-      y += 14;
-    }
-    tableRows.forEach((row) => {
-      const h = rowHeight(row, colWidths, 9);
-      if (y + h > doc.page.height - doc.page.margins.bottom) {
-        doc.addPage();
-        y = doc.page.margins.top;
-      }
-      drawRow(row, colWidths, startX, y, 9);
-      y += h;
-    });
-    doc.y = y + 12;
-  };
+  const pageLeft = pdfPageLeft(doc);
+  const drawTable = (title, headers, tableRows, colWidths) => drawPdfTable(doc, pageLeft, title, headers, tableRows, colWidths);
 
   drawTable("Executive Summary", REPORT_HEADERS.summary, rows.summary, [200, 200]);
 

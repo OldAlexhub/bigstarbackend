@@ -10,14 +10,17 @@ import { findSheetByName, findHeaderColumn, numericValue, cellText } from "./rep
 // column, extra derived sheets) versions of the template equally - neither
 // of those differences matters here since only 7 columns are ever read.
 //
-// Deliberately NOT read: Operator, Provider, Scheduled Service Hours,
-// Fulfillment %, Trips Per Service Hour, Shift. Operator/Provider/Scheduled
-// Hours already come from Master Run Cuts ("derive, don't re-enter" - see
-// trackerRows.js); Fulfillment %/TPSH are recomputed live elsewhere. Fulfillment
-// % is also never safe to divide by 100 the way OTP % is - it's stored as a
-// true fraction that routinely exceeds 1 (actual hours can exceed scheduled),
-// unlike OTP % which is a plain 0-100 number - so skipping it entirely avoids
-// that trap rather than needing a column-aware exception.
+// Deliberately NOT read: Fulfillment %, Trips Per Service Hour, Shift -
+// recomputed live elsewhere or unused. Fulfillment % is also never safe to
+// divide by 100 the way OTP % is - it's stored as a true fraction that
+// routinely exceeds 1 (actual hours can exceed scheduled), unlike OTP %
+// which is a plain 0-100 number - so skipping it entirely avoids that trap.
+//
+// Scheduled Service Hours, Operator, and Provider ARE read, but only as
+// fallback values (see schedHours/operator/provider below) -
+// RunCutDay.serviceHours and Deployment's operator->provider chain stay
+// authoritative whenever Deployment has any record of the day at all
+// ("derive, don't re-enter" - see trackerRows.js).
 export const parseDailyKpiTrackerReport = (buffer) => {
   const grid = findSheetByName(buffer, "Daily Tracker");
   if (grid.length < 2) {
@@ -27,6 +30,15 @@ export const parseDailyKpiTrackerReport = (buffer) => {
   const headerRow = 0;
   const dateCol = findHeaderColumn(grid, headerRow, [/^\s*Date\s*$/i], "Daily Tracker date", 0);
   const routeCol = findHeaderColumn(grid, headerRow, [/^\s*Route\s*$/i], "Daily Tracker route", 3);
+  const operatorCol = findHeaderColumn(grid, headerRow, [/^\s*Operator\s*$/i], "Operator", 1);
+  const providerCol = findHeaderColumn(grid, headerRow, [/^\s*Provider\s*$/i], "Provider", 2);
+  const schedHoursCol = findHeaderColumn(
+    grid,
+    headerRow,
+    [/^\s*Scheduled\s+Service\s+Hours\s*$/i],
+    "Scheduled Service Hours",
+    4
+  );
   const actualHoursCol = findHeaderColumn(
     grid,
     headerRow,
@@ -53,6 +65,8 @@ export const parseDailyKpiTrackerReport = (buffer) => {
     const rawDateCell = line[dateCol];
     const date = typeof rawDateCell === "number" ? excelSerialToISODate(rawDateCell) : null;
     const rawRoute = cellText(line[routeCol]).trim();
+    const rawOperator = cellText(line[operatorCol]).trim() || null;
+    const rawProvider = cellText(line[providerCol]).trim() || null;
 
     if (!date || !rawRoute) {
       warnings.push(`Row ${r + 1}: missing Date or Route - skipped.`);
@@ -75,13 +89,30 @@ export const parseDailyKpiTrackerReport = (buffer) => {
     const routeClosures = numericValue(line[routeClosuresCol]) ?? 0;
     const lateToFirst = numericValue(line[lateToFirstCol]) ?? 0;
     const lateDeploy = numericValue(line[lateDeployCol]) ?? 0;
+    // Unlike the three fields above, a blank Scheduled Hours cell means
+    // "not given" (null), not "zero" - this is a fallback value, and a real
+    // zero (a route legitimately not scheduled that day) is a different,
+    // meaningful fact from "we just don't know."
+    const schedHours = numericValue(line[schedHoursCol]);
 
     if (actualHours === 0 && totalTrips === 0 && otpPct === 0 && routeClosures === 0 && lateToFirst === 0 && lateDeploy === 0) {
       warnings.push(`${date}: route "${rawRoute}" had no hours, trips, OTP, or events - treated as closed for the day and skipped.`);
       continue;
     }
 
-    rows.push({ date, route: rawRoute, actualHours, totalTrips, otpPct, routeClosures, lateToFirst, lateDeploy });
+    rows.push({
+      date,
+      route: rawRoute,
+      actualHours,
+      totalTrips,
+      otpPct,
+      routeClosures,
+      lateToFirst,
+      lateDeploy,
+      schedHours,
+      operator: rawOperator,
+      provider: rawProvider,
+    });
   }
 
   return { rows, warnings };

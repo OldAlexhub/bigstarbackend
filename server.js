@@ -20,6 +20,7 @@ import networkSuccessRoutes from "./routes/networkSuccessRoutes.js"
 import emailTemplatesRoutes from "./routes/emailTemplatesRoutes.js"
 import homeSummaryRoutes from "./routes/homeSummaryRoutes.js"
 import eltReportingRoutes from "./routes/eltReportingRoutes.js"
+import leaderboardRoutes from "./routes/leaderboardRoutes.js"
 import usersRoutes from "./routes/usersRoutes.js"
 import { scheduleWeeklyFinalization } from "./jobs/finalizeWeeks.js"
 import { scheduleAssignmentRollover } from "./jobs/rolloverAssignments.js"
@@ -63,6 +64,7 @@ app.use("/api/network-success/email-templates", emailTemplatesRoutes)
 app.use("/api/network-success", networkSuccessRoutes)
 app.use("/api/home-summary", homeSummaryRoutes)
 app.use("/api/elt-reporting", eltReportingRoutes)
+app.use("/api/leaderboard", leaderboardRoutes)
 app.use("/api/users", usersRoutes)
 
 const publicDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "public")
