@@ -16,8 +16,6 @@ import settingsRoutes from "./routes/settingsRoutes.js"
 import dailyIssuesRoutes from "./routes/dailyIssuesRoutes.js"
 import reportsRoutes from "./routes/reportsRoutes.js"
 import providersRoutes from "./routes/providersRoutes.js"
-import networkSuccessRoutes from "./routes/networkSuccessRoutes.js"
-import emailTemplatesRoutes from "./routes/emailTemplatesRoutes.js"
 import homeSummaryRoutes from "./routes/homeSummaryRoutes.js"
 import eltReportingRoutes from "./routes/eltReportingRoutes.js"
 import leaderboardRoutes from "./routes/leaderboardRoutes.js"
@@ -60,8 +58,6 @@ app.use("/api/settings", settingsRoutes)
 app.use("/api/daily-issues", dailyIssuesRoutes)
 app.use("/api/reports", reportsRoutes)
 app.use("/api/providers", providersRoutes)
-app.use("/api/network-success/email-templates", emailTemplatesRoutes)
-app.use("/api/network-success", networkSuccessRoutes)
 app.use("/api/home-summary", homeSummaryRoutes)
 app.use("/api/elt-reporting", eltReportingRoutes)
 app.use("/api/leaderboard", leaderboardRoutes)

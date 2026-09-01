@@ -41,25 +41,6 @@ const divisionSchema = new mongoose.Schema(
       breakMinutes: { type: Number, default: null },
       revenueRatio: { type: Number, default: null },
     },
-    kpiSettings: {
-      otpThresh: { type: Number, default: null },
-      shfThresh: { type: Number, default: null },
-      tpshBench: { type: Number, default: null },
-      routeClosureBench: { type: Number, default: null },
-      lateFirstBench: { type: Number, default: null },
-      lateDeployBench: { type: Number, default: null },
-      scoreCap: { type: Number, default: null },
-      revenueHourDeduction: { type: Number, default: null },
-      revenueHourMultiplier: { type: Number, default: null },
-      weights: {
-        otp: { type: Number, default: null },
-        shf: { type: Number, default: null },
-        tpsh: { type: Number, default: null },
-        routeClosure: { type: Number, default: null },
-        lateFirst: { type: Number, default: null },
-        lateDeploy: { type: Number, default: null },
-      },
-    },
   },
   { timestamps: true }
 );

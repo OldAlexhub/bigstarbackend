@@ -11,7 +11,7 @@ import {
 
 const router = Router();
 
-router.use(protect, requireAnySection(["master_run_cuts", "deployment", "network_success"]));
+router.use(protect, requireAnySection(["master_run_cuts", "deployment"]));
 
 router.get("/", listRunCutDays);
 router.post("/", createExtraRunCutDay);

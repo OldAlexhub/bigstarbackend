@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
 
-export const SECTIONS = ["master_run_cuts", "deployment", "network_success"];
+export const SECTIONS = ["master_run_cuts", "deployment"];
 
 // "ELT" is the only role that bypasses section/division checks everywhere
 // in the app (see requireELT/canAccessDivision/divisionFilter in

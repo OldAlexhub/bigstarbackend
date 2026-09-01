@@ -6,9 +6,6 @@ import RunCutDay from "../models/RunCutDay.js";
 import DailyIssueLog from "../models/DailyIssueLog.js";
 import { divisionFilter } from "../middleware/access.js";
 import { addDays, emptyMetrics, accumulate, coveragePct, runCutFulfillmentPct } from "../utils/weeklyMetrics.js";
-import { buildTrackerRows } from "../utils/kpi/trackerRows.js";
-import { routeDailyData, computeRankings } from "../utils/kpi/rankings.js";
-import { getEffectiveKpiSettings } from "../utils/kpi/settings.js";
 import { pdfPageLeft, drawPdfTable } from "../utils/pdfTable.js";
 
 const iso = (d) => new Date(d).toISOString().slice(0, 10);
@@ -18,10 +15,6 @@ const round2 = (n) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 
 // the frontend formats them for display. Only the file exports below turn
 // these into human-readable "84.6%" strings.
 const roundFrac = (n) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 10000) / 10000);
-const safeMean = (values) => {
-  const nums = values.filter((v) => Number.isFinite(v));
-  return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
-};
 
 // runCutFulfillmentPct/coveragePct default to 0 when nothing was scheduled
 // at all (see weeklyMetrics.js) — fine for a live dashboard, but a "0%"
@@ -34,11 +27,29 @@ const fulfillmentOrNull = (metrics) => ({
 
 const parseDivisionIds = (raw) => (raw ? String(raw).split(",").filter(Boolean) : null);
 
-// Groups the flat, cross-division rcd/daily-row lists into per-bucket
-// fulfillment/OTP numbers for the trend chart. Daily buckets stay readable
-// up to 6 weeks; beyond that the chart would be too dense, so it switches
-// to weekly buckets instead.
-const buildTrend = (from, to, allRunCutDays, allDailyRows) => {
+// A route closure is either an explicit RunCutDay suspension or a matching
+// DailyIssueLog entry (Unperformed Duty/Route Closed) — the same two
+// signals Deployment already tracks. Counted once per (route, date), not
+// twice if both are present for the same day.
+const CLOSURE_DISRUPTION_TYPES = ["Unperformed Duty", "Route Closed"];
+const countClosures = (runCutDays, issues) => {
+  const closedKeys = new Set();
+  runCutDays.forEach((rcd) => {
+    if (rcd.status === "suspended" && rcd.route) closedKeys.add(`${rcd.route._id}|${iso(rcd.date)}`);
+  });
+  issues.forEach((i) => {
+    if (i.route && CLOSURE_DISRUPTION_TYPES.includes(i.disruptionType)) {
+      closedKeys.add(`${i.route._id}|${iso(i.date)}`);
+    }
+  });
+  return closedKeys.size;
+};
+
+// Groups the flat, cross-division RunCutDay list into per-bucket
+// fulfillment numbers for the trend chart. Daily buckets stay readable up
+// to 6 weeks; beyond that the chart would be too dense, so it switches to
+// weekly buckets instead.
+const buildTrend = (from, to, allRunCutDays) => {
   const spanDays = Math.round((to - from) / 86400000) + 1;
   const byWeek = spanDays > 42;
 
@@ -51,24 +62,20 @@ const buildTrend = (from, to, allRunCutDays, allDailyRows) => {
 
   const buckets = new Map();
   const getBucket = (key) => {
-    if (!buckets.has(key)) buckets.set(key, { metrics: emptyMetrics(), otpValues: [] });
+    if (!buckets.has(key)) buckets.set(key, emptyMetrics());
     return buckets.get(key);
   };
 
   allRunCutDays.forEach((rcd) => {
     if (rcd.route?.type === "standby") return;
-    accumulate(getBucket(bucketKey(rcd.date)).metrics, rcd);
-  });
-  allDailyRows.forEach((row) => {
-    if (row.otp != null) getBucket(bucketKey(row.date)).otpValues.push(row.otp);
+    accumulate(getBucket(bucketKey(rcd.date)), rcd);
   });
 
   return Array.from(buckets.entries())
     .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([bucketStart, bucket]) => ({
+    .map(([bucketStart, metrics]) => ({
       bucketStart,
-      ...fulfillmentOrNull(bucket.metrics),
-      avgOtp: roundFrac(safeMean(bucket.otpValues)),
+      ...fulfillmentOrNull(metrics),
     }));
 };
 
@@ -80,18 +87,14 @@ const computeReport = async (req, from, to, divisionIds) => {
   const divisions = await Division.find(filter).sort({ code: 1 });
 
   const allRunCutDays = [];
-  const allDailyRows = [];
   const allIssues = [];
-  const allBelowTargetProviders = [];
 
   const perDivision = await Promise.all(
     divisions.map(async (division) => {
-      const [runCutDays, issues, unassignedRunCuts, kpiSettings, rows] = await Promise.all([
+      const [runCutDays, issues, unassignedRunCuts] = await Promise.all([
         RunCutDay.find({ division: division._id, date: { $gte: from, $lte: to } }).populate("route", "type"),
         DailyIssueLog.find({ division: division._id, date: { $gte: from, $lte: to } }).populate("route", "code"),
         RunCut.find({ division: division._id, status: "unassigned" }).populate("route", "code type"),
-        getEffectiveKpiSettings(division),
-        buildTrackerRows(division._id, from, to),
       ]);
 
       allRunCutDays.push(...runCutDays);
@@ -101,26 +104,6 @@ const computeReport = async (req, from, to, divisionIds) => {
         if (rcd.route?.type === "standby") return;
         accumulate(metrics, rcd);
       });
-
-      const daily = routeDailyData(rows);
-      allDailyRows.push(...daily);
-
-      const providerRankings = computeRankings(daily, kpiSettings, ["provider"]);
-      const belowTargetProviders = providerRankings
-        .filter((r) => !r.meetsOtp || !r.meetsShf || !r.meetsTpsh)
-        .map((r) => ({
-          divisionId: division._id,
-          divisionName: division.name,
-          provider: r.provider,
-          failedKpis: r.failedKpis,
-          composite: r.composite,
-        }));
-      allBelowTargetProviders.push(...belowTargetProviders);
-
-      const serviceRows = daily.filter((r) => !r.isClosureOnly);
-      const totalTrips = daily.reduce((s, r) => s + r.totalTrips, 0);
-      const totalActualHrs = daily.reduce((s, r) => s + r.actualHrs, 0);
-      const totalSchedHrs = daily.reduce((s, r) => s + r.schedHrs, 0);
 
       const unassignedRoutes = unassignedRunCuts
         .filter((rc) => rc.route && rc.route.type !== "standby")
@@ -135,6 +118,10 @@ const computeReport = async (req, from, to, divisionIds) => {
         disruptionType: i.disruptionType,
         notes: i.notes,
       }));
+
+      const lateToFirst = issues.filter((i) => i.disruptionType === "Late to First").length;
+      const lateDeploy = issues.filter((i) => i.disruptionType === "Late Deploy").length;
+
       allIssues.push(...divIssues);
 
       return {
@@ -145,16 +132,11 @@ const computeReport = async (req, from, to, divisionIds) => {
         revenueHoursScheduled: round2(metrics.revenueHoursScheduled),
         revenueHoursCovered: round2(metrics.revenueHoursCovered),
         revenueHoursAtRisk: round2(metrics.revenueHoursScheduled - metrics.revenueHoursCovered),
-        avgOtp: roundFrac(safeMean(serviceRows.map((r) => r.otp))),
-        avgShf: totalSchedHrs > 0 ? roundFrac(totalActualHrs / totalSchedHrs) : null,
-        avgTpsh: totalActualHrs > 0 ? round2(totalTrips / totalActualHrs) : null,
-        totalTrips,
-        totalClosures: daily.reduce((s, r) => s + r.routeClosures, 0),
-        totalLateFirst: daily.reduce((s, r) => s + r.lateToFirst, 0),
-        totalLateDeploy: daily.reduce((s, r) => s + r.lateDeploy, 0),
+        totalClosures: countClosures(runCutDays, issues),
+        totalLateFirst: lateToFirst,
+        totalLateDeploy: lateDeploy,
         unassignedRoutesCount: unassignedRoutes.length,
         unassignedRoutes,
-        belowTargetProviders,
         issueCount: divIssues.length,
       };
     })
@@ -166,10 +148,6 @@ const computeReport = async (req, from, to, divisionIds) => {
     return acc;
   }, { revenueHoursScheduled: 0, revenueHoursCovered: 0 });
 
-  const netServiceRows = allDailyRows.filter((r) => !r.isClosureOnly);
-  const netTotalTrips = allDailyRows.reduce((s, r) => s + r.totalTrips, 0);
-  const netTotalActualHrs = allDailyRows.reduce((s, r) => s + r.actualHrs, 0);
-  const netTotalSchedHrs = allDailyRows.reduce((s, r) => s + r.schedHrs, 0);
   const netMetrics = emptyMetrics();
   allRunCutDays.forEach((rcd) => {
     if (rcd.route?.type === "standby") return;
@@ -179,17 +157,10 @@ const computeReport = async (req, from, to, divisionIds) => {
   const networkSummary = {
     ...fulfillmentOrNull(netMetrics),
     revenueHoursAtRisk: round2(combinedMetrics.revenueHoursScheduled - combinedMetrics.revenueHoursCovered),
-    avgOtp: roundFrac(safeMean(netServiceRows.map((r) => r.otp))),
-    avgShf: netTotalSchedHrs > 0 ? roundFrac(netTotalActualHrs / netTotalSchedHrs) : null,
-    avgTpsh: netTotalActualHrs > 0 ? round2(netTotalTrips / netTotalActualHrs) : null,
-    totalTrips: netTotalTrips,
-    totalClosures: allDailyRows.reduce((s, r) => s + r.routeClosures, 0),
-    totalLateFirst: allDailyRows.reduce((s, r) => s + r.lateToFirst, 0),
-    totalLateDeploy: allDailyRows.reduce((s, r) => s + r.lateDeploy, 0),
+    totalClosures: perDivision.reduce((s, d) => s + d.totalClosures, 0),
+    totalLateFirst: perDivision.reduce((s, d) => s + d.totalLateFirst, 0),
+    totalLateDeploy: perDivision.reduce((s, d) => s + d.totalLateDeploy, 0),
     unassignedRoutesCount: perDivision.reduce((s, d) => s + d.unassignedRoutesCount, 0),
-    providersFailingOtp: allBelowTargetProviders.filter((p) => p.failedKpis.includes("OTP")).length,
-    providersFailingShf: allBelowTargetProviders.filter((p) => p.failedKpis.includes("SHF")).length,
-    providersFailingTpsh: allBelowTargetProviders.filter((p) => p.failedKpis.includes("TPSH")).length,
   };
 
   return {
@@ -197,8 +168,7 @@ const computeReport = async (req, from, to, divisionIds) => {
     to: iso(to),
     networkSummary,
     divisions: perDivision,
-    trend: buildTrend(from, to, allRunCutDays, allDailyRows),
-    providersBelowTarget: allBelowTargetProviders.sort((a, b) => (a.composite ?? 0) - (b.composite ?? 0)),
+    trend: buildTrend(from, to, allRunCutDays),
     issues: allIssues.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)),
   };
 };
@@ -240,16 +210,11 @@ const REPORT_HEADERS = {
     "Run Cut Fulfillment %",
     "Revenue Hour Fulfillment %",
     "Revenue Hours At Risk",
-    "Avg OTP %",
-    "Avg SHF %",
-    "Avg TPSH",
-    "Total Trips",
     "Closures",
     "Late to First",
     "Late Deploy",
     "Unassigned Routes",
   ],
-  providers: ["Division", "Provider", "Failed KPIs", "Composite Score"],
   issues: ["Division", "Date", "Route", "Disruption", "Notes"],
 };
 
@@ -268,35 +233,20 @@ const toRows = (report) => ({
     ["Run Cut Fulfillment %", fmtPct(report.networkSummary.runCutFulfillmentPct)],
     ["Revenue Hour Fulfillment %", fmtPct(report.networkSummary.revenueHourFulfillmentPct)],
     ["Revenue Hours At Risk", report.networkSummary.revenueHoursAtRisk],
-    ["Avg OTP %", fmtPct(report.networkSummary.avgOtp)],
-    ["Avg SHF %", fmtPct(report.networkSummary.avgShf)],
-    ["Avg TPSH", report.networkSummary.avgTpsh],
-    ["Total Trips", report.networkSummary.totalTrips],
     ["Total Closures", report.networkSummary.totalClosures],
+    ["Total Late to First", report.networkSummary.totalLateFirst],
+    ["Total Late Deploy", report.networkSummary.totalLateDeploy],
     ["Unassigned Routes", report.networkSummary.unassignedRoutesCount],
-    ["Providers Failing OTP", report.networkSummary.providersFailingOtp],
-    ["Providers Failing SHF", report.networkSummary.providersFailingShf],
-    ["Providers Failing TPSH", report.networkSummary.providersFailingTpsh],
   ],
   divisions: report.divisions.map((d) => [
     d.name,
     fmtPct(d.runCutFulfillmentPct),
     fmtPct(d.revenueHourFulfillmentPct),
     d.revenueHoursAtRisk,
-    fmtPct(d.avgOtp),
-    fmtPct(d.avgShf),
-    d.avgTpsh,
-    d.totalTrips,
     d.totalClosures,
     d.totalLateFirst,
     d.totalLateDeploy,
     d.unassignedRoutesCount,
-  ]),
-  providers: report.providersBelowTarget.map((p) => [
-    p.divisionName,
-    p.provider,
-    p.failedKpis.join(", "),
-    p.composite,
   ]),
   issues: report.issues.map((i) => [i.divisionName, i.date, i.routeCode || "", i.disruptionType, i.notes || ""]),
 });
@@ -318,11 +268,6 @@ export const exportEltReport = async (req, res) => {
       XLSX.utils.aoa_to_sheet([REPORT_HEADERS.divisions, ...rows.divisions]),
       "Per-Division"
     );
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.aoa_to_sheet([REPORT_HEADERS.providers, ...rows.providers]),
-      "Provider Performance"
-    );
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([REPORT_HEADERS.issues, ...rows.issues]), "Issues");
     const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -339,10 +284,6 @@ export const exportEltReport = async (req, res) => {
       ["PER-DIVISION"],
       REPORT_HEADERS.divisions,
       ...rows.divisions,
-      [],
-      ["PROVIDER PERFORMANCE"],
-      REPORT_HEADERS.providers,
-      ...rows.providers,
       [],
       ["ISSUES"],
       REPORT_HEADERS.issues,
@@ -372,21 +313,20 @@ export const exportEltReport = async (req, res) => {
 
   drawTable("Executive Summary", REPORT_HEADERS.summary, rows.summary, [200, 200]);
 
-  const pdfDivisionHeaders = ["Division", "Run Cut Fulfill.", "Rev. Hr Fulfill.", "Hrs At Risk", "OTP", "SHF", "TPSH", "Unassigned"];
+  const pdfDivisionHeaders = ["Division", "Run Cut Fulfill.", "Rev. Hr Fulfill.", "Hrs At Risk", "Closures", "Late 1st", "Late Dep", "Unassigned"];
   const pdfDivisionRows = report.divisions.map((d) => [
     d.name,
     fmtPct(d.runCutFulfillmentPct),
     fmtPct(d.revenueHourFulfillmentPct),
     d.revenueHoursAtRisk,
-    fmtPct(d.avgOtp),
-    fmtPct(d.avgShf),
-    d.avgTpsh,
+    d.totalClosures,
+    d.totalLateFirst,
+    d.totalLateDeploy,
     d.unassignedRoutesCount,
   ]);
-  drawTable("Per-Division", pdfDivisionHeaders, pdfDivisionRows, [130, 65, 65, 60, 42, 42, 48, 65]);
+  drawTable("Per-Division", pdfDivisionHeaders, pdfDivisionRows, [130, 65, 65, 62, 50, 50, 50, 65]);
 
   doc.addPage();
-  drawTable("Provider Performance", REPORT_HEADERS.providers, rows.providers, [130, 150, 170, 60]);
   drawTable("Issues", REPORT_HEADERS.issues, rows.issues, [110, 60, 60, 100, 190]);
 
   doc.end();

@@ -10,7 +10,7 @@ import {
 
 const router = Router();
 
-router.use(protect, requireAnySection(["master_run_cuts", "deployment", "network_success"]));
+router.use(protect, requireAnySection(["master_run_cuts", "deployment"]));
 
 router.get("/", listRunCuts);
 router.post("/", createRunCut);

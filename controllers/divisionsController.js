@@ -22,36 +22,12 @@ export const updateDivision = async (req, res) => {
     return res.status(403).json({ message: "No access to this division" });
   }
 
-  const { name, active, thresholds, kpiSettings } = req.body;
+  const { name, active, thresholds } = req.body;
   if (name !== undefined) division.name = name;
   if (active !== undefined) division.active = active;
   if (thresholds !== undefined) {
     if (thresholds.breakMinutes !== undefined) division.thresholds.breakMinutes = thresholds.breakMinutes;
     if (thresholds.revenueRatio !== undefined) division.thresholds.revenueRatio = thresholds.revenueRatio;
-  }
-  if (kpiSettings !== undefined) {
-    const scalarKeys = [
-      "otpThresh",
-      "shfThresh",
-      "tpshBench",
-      "routeClosureBench",
-      "lateFirstBench",
-      "lateDeployBench",
-      "scoreCap",
-      "revenueHourDeduction",
-      "revenueHourMultiplier",
-    ];
-    for (const key of scalarKeys) {
-      if (kpiSettings[key] !== undefined) division.kpiSettings[key] = kpiSettings[key];
-    }
-    if (kpiSettings.weights !== undefined) {
-      const weightKeys = ["otp", "shf", "tpsh", "routeClosure", "lateFirst", "lateDeploy"];
-      for (const key of weightKeys) {
-        if (kpiSettings.weights[key] !== undefined) {
-          division.kpiSettings.weights[key] = kpiSettings.weights[key];
-        }
-      }
-    }
   }
   if (req.user.role === "ELT") {
     const { code, type, parentDivision, timezone } = req.body;

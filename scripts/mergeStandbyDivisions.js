@@ -7,7 +7,6 @@ import Vehicle from "../models/Vehicle.js";
 import RunCutDay from "../models/RunCutDay.js";
 import RunCut from "../models/RunCut.js";
 import DailyIssueLog from "../models/DailyIssueLog.js";
-import DailyKpiEntry from "../models/DailyKpiEntry.js";
 import WeeklyDivisionSummary from "../models/WeeklyDivisionSummary.js";
 import User from "../models/User.js";
 
@@ -78,22 +77,19 @@ const run = async () => {
         (fromId, toId) => RunCutDay.updateMany({ route: fromId }, { route: toId }),
         (fromId, toId) => RunCut.updateMany({ route: fromId }, { route: toId }),
         (fromId, toId) => DailyIssueLog.updateMany({ route: fromId }, { route: toId }),
-        (fromId, toId) => DailyKpiEntry.updateMany({ route: fromId }, { route: toId }),
       ],
     });
     console.log(`  routes: moved ${routeResult.moved}, deduped into existing ${routeResult.deduped}`);
 
-    const [runCutDays, runCuts, dailyIssueLogs, dailyKpiEntries] = await Promise.all([
+    const [runCutDays, runCuts, dailyIssueLogs] = await Promise.all([
       RunCutDay.updateMany({ division: standby._id }, { division: parentId }),
       RunCut.updateMany({ division: standby._id }, { division: parentId }),
       DailyIssueLog.updateMany({ division: standby._id }, { division: parentId }),
-      DailyKpiEntry.updateMany({ division: standby._id }, { division: parentId }),
     ]);
 
     console.log(`  runCutDays: ${runCutDays.modifiedCount}`);
     console.log(`  runCuts (templates): ${runCuts.modifiedCount}`);
     console.log(`  dailyIssueLogs: ${dailyIssueLogs.modifiedCount}`);
-    console.log(`  dailyKpiEntries: ${dailyKpiEntries.modifiedCount}`);
 
     const wipedSummaries = await WeeklyDivisionSummary.deleteMany({
       division: { $in: [standby._id, parentId] },
@@ -107,23 +103,22 @@ const run = async () => {
     }
     console.log(`  users remapped: ${usersToRemap}`);
 
-    const [remainingRoutes, remainingVehicles, remainingRunCutDays, remainingRunCuts, remainingIssues, remainingKpi] =
+    const [remainingRoutes, remainingVehicles, remainingRunCutDays, remainingRunCuts, remainingIssues] =
       await Promise.all([
         Route.countDocuments({ division: standby._id }),
         Vehicle.countDocuments({ division: standby._id }),
         RunCutDay.countDocuments({ division: standby._id }),
         RunCut.countDocuments({ division: standby._id }),
         DailyIssueLog.countDocuments({ division: standby._id }),
-        DailyKpiEntry.countDocuments({ division: standby._id }),
       ]);
     const remainingTotal =
-      remainingRoutes + remainingVehicles + remainingRunCutDays + remainingRunCuts + remainingIssues + remainingKpi;
+      remainingRoutes + remainingVehicles + remainingRunCutDays + remainingRunCuts + remainingIssues;
 
     if (remainingTotal > 0) {
       console.error(
         `  ABORTING delete of ${standby.code}: ${remainingTotal} document(s) still reference it ` +
           `(routes=${remainingRoutes}, vehicles=${remainingVehicles}, runCutDays=${remainingRunCutDays}, ` +
-          `runCuts=${remainingRunCuts}, issues=${remainingIssues}, kpiEntries=${remainingKpi}).`
+          `runCuts=${remainingRunCuts}, issues=${remainingIssues}).`
       );
       continue;
     }

@@ -11,25 +11,20 @@ import {
   coveragePct,
   runCutFulfillmentPct,
 } from "../utils/weeklyMetrics.js";
-import { buildTrackerRows } from "../utils/kpi/trackerRows.js";
-import { routeDailyData, computeRankings } from "../utils/kpi/rankings.js";
-import { getEffectiveKpiSettings } from "../utils/kpi/settings.js";
 import { todayInTimezone } from "../utils/timezone.js";
 
 const emptyTotals = () => ({
   routesSuspendedToday: 0,
   openIssuesToday: 0,
   unassignedRoutes: 0,
-  providersBelowTarget: 0,
 });
 
 export const getHomeSummary = async (req, res) => {
   const hasOperationsAccess =
     req.user.role === "ELT" || req.user.sections.includes("master_run_cuts") || req.user.sections.includes("deployment");
-  const hasNetworkSuccessAccess = req.user.role === "ELT" || req.user.sections.includes("network_success");
 
-  if (!hasOperationsAccess && !hasNetworkSuccessAccess) {
-    return res.json({ divisions: [], totals: emptyTotals(), hasOperationsAccess, hasNetworkSuccessAccess });
+  if (!hasOperationsAccess) {
+    return res.json({ divisions: [], totals: emptyTotals(), hasOperationsAccess });
   }
 
   const divisions = await Division.find({ ...divisionFilter(req.user), active: true }).sort({ code: 1 });
@@ -43,56 +38,40 @@ export const getHomeSummary = async (req, res) => {
       const weekStart = startOfWeek(today);
       const weekEnd = addDays(weekStart, 6);
 
-      let suspendedRoutes = [];
-      let openIssues = [];
-      let unassignedRoutes = [];
-      let belowTargetProviders = [];
       const metrics = emptyMetrics();
 
-      if (hasOperationsAccess) {
-        const [suspendedDays, issues, unassignedRunCuts, weekRunCutDays] = await Promise.all([
-          RunCutDay.find({ division: division._id, date: today, status: "suspended" }).populate("route", "code"),
-          DailyIssueLog.find({ division: division._id, date: today }).populate("route", "code"),
-          // "Unassigned" is a Master Run Cuts (RunCut) concept — the persistent
-          // assignment state — not a Deployment day-specific override, so this
-          // reads from RunCut rather than today's RunCutDay projection.
-          RunCut.find({ division: division._id, status: "unassigned" }).populate("route", "code type"),
-          RunCutDay.find({ division: division._id, date: { $gte: weekStart, $lte: weekEnd } }).populate(
-            "route",
-            "type"
-          ),
-        ]);
+      const [suspendedDays, issues, unassignedRunCuts, weekRunCutDays] = await Promise.all([
+        RunCutDay.find({ division: division._id, date: today, status: "suspended" }).populate("route", "code"),
+        DailyIssueLog.find({ division: division._id, date: today }).populate("route", "code"),
+        // "Unassigned" is a Master Run Cuts (RunCut) concept — the persistent
+        // assignment state — not a Deployment day-specific override, so this
+        // reads from RunCut rather than today's RunCutDay projection.
+        RunCut.find({ division: division._id, status: "unassigned" }).populate("route", "code type"),
+        RunCutDay.find({ division: division._id, date: { $gte: weekStart, $lte: weekEnd } }).populate(
+          "route",
+          "type"
+        ),
+      ]);
 
-        suspendedRoutes = suspendedDays
-          .filter((d) => d.route)
-          .map((d) => ({ routeId: d.route._id, routeCode: d.route.code }));
-        openIssues = issues.map((i) => ({
-          issueId: i._id,
-          routeCode: i.route?.code || null,
-          disruptionType: i.disruptionType,
-          notes: i.notes,
-        }));
-        unassignedRoutes = unassignedRunCuts
-          .filter((rc) => rc.route && rc.route.type !== "standby")
-          .map((rc) => ({ routeId: rc.route._id, routeCode: rc.route.code }));
+      const suspendedRoutes = suspendedDays
+        .filter((d) => d.route)
+        .map((d) => ({ routeId: d.route._id, routeCode: d.route.code }));
+      const openIssues = issues.map((i) => ({
+        issueId: i._id,
+        routeCode: i.route?.code || null,
+        disruptionType: i.disruptionType,
+        notes: i.notes,
+      }));
+      const unassignedRoutes = unassignedRunCuts
+        .filter((rc) => rc.route && rc.route.type !== "standby")
+        .map((rc) => ({ routeId: rc.route._id, routeCode: rc.route.code }));
 
-        // This week's fulfillment, same computation the Master Run Cuts
-        // Tracker uses — standby duties are excluded there too.
-        weekRunCutDays.forEach((runCutDay) => {
-          if (runCutDay.route?.type === "standby") return;
-          accumulate(metrics, runCutDay);
-        });
-      }
-
-      if (hasNetworkSuccessAccess) {
-        const kpiSettings = await getEffectiveKpiSettings(division);
-        const rows = await buildTrackerRows(division._id, weekStart, weekEnd);
-        const daily = routeDailyData(rows);
-        const providerRankings = computeRankings(daily, kpiSettings, ["provider"]);
-        belowTargetProviders = providerRankings
-          .filter((r) => !r.meetsOtp || !r.meetsShf || !r.meetsTpsh)
-          .map((r) => ({ provider: r.provider, failedKpis: r.failedKpis }));
-      }
+      // This week's fulfillment, same computation the Master Run Cuts
+      // Tracker uses — standby duties are excluded there too.
+      weekRunCutDays.forEach((runCutDay) => {
+        if (runCutDay.route?.type === "standby") return;
+        accumulate(metrics, runCutDay);
+      });
 
       return {
         divisionId: division._id,
@@ -101,7 +80,6 @@ export const getHomeSummary = async (req, res) => {
         suspendedRoutes,
         openIssues,
         unassignedRoutes,
-        belowTargetProviders,
         metrics,
       };
     })
@@ -112,7 +90,6 @@ export const getHomeSummary = async (req, res) => {
     routesSuspendedToday: rest.suspendedRoutes.length,
     openIssuesToday: rest.openIssues.length,
     unassignedRoutesCount: rest.unassignedRoutes.length,
-    providersBelowTarget: rest.belowTargetProviders.length,
     runCutFulfillmentPct: runCutFulfillmentPct(metrics),
     revenueHourFulfillmentPct: coveragePct(metrics),
   }));
@@ -129,12 +106,11 @@ export const getHomeSummary = async (req, res) => {
       routesSuspendedToday: acc.routesSuspendedToday + r.routesSuspendedToday,
       openIssuesToday: acc.openIssuesToday + r.openIssuesToday,
       unassignedRoutes: acc.unassignedRoutes + r.unassignedRoutesCount,
-      providersBelowTarget: acc.providersBelowTarget + r.providersBelowTarget,
     }),
     emptyTotals()
   );
   totals.runCutFulfillmentPct = runCutFulfillmentPct(combinedMetrics);
   totals.revenueHourFulfillmentPct = coveragePct(combinedMetrics);
 
-  res.json({ divisions: results, totals, hasOperationsAccess, hasNetworkSuccessAccess });
+  res.json({ divisions: results, totals, hasOperationsAccess });
 };
