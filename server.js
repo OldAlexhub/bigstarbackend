@@ -42,7 +42,10 @@ app.use(cors({ origin: process.env.CLIENT_URL || true, credentials: true }))
 // here since the client is deployed separately from this API.
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }))
 app.use(cookieParser())
-app.use(express.json())
+// express.json()'s default 100kb limit is easily exceeded by a large KPI
+// import confirmation (hundreds/thousands of rows in one JSON body) - 10mb
+// matches the file-upload size limit already allowed for the raw workbook.
+app.use(express.json({ limit: "10mb" }))
 
 app.use("/api/auth", authRoutes)
 app.use("/api/divisions", divisionsRoutes)
