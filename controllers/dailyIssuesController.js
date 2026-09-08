@@ -84,11 +84,11 @@ export const createDailyIssue = async (req, res) => {
 };
 
 // Auto-synced entries (autoSyncTag set) are derived from a RunCutDay's
-// status/disruption — see server/utils/autoIssueSync.js — and get
+// status/disruption/client notes — see server/utils/autoIssueSync.js — and get
 // regenerated the next time that route's live day changes, so editing or
 // deleting one here wouldn't stick. Only manually-logged entries can be
 // changed through this endpoint; the real edit for an auto-synced one is
-// changing the route's status/disruption in Deployment's Live Schedule.
+// changing the route's live-day fields in Deployment's Live Schedule.
 export const updateDailyIssue = async (req, res) => {
   const issue = await DailyIssueLog.findById(req.params.id);
   if (!issue) return res.status(404).json({ message: "Issue not found" });
@@ -97,7 +97,7 @@ export const updateDailyIssue = async (req, res) => {
   }
   if (issue.autoSyncTag) {
     return res.status(400).json({
-      message: "This entry is auto-synced from the route's live status — change it from Deployment's Live Schedule instead.",
+      message: "This entry is auto-synced from the route's live day — change it from Deployment's Live Schedule instead.",
     });
   }
 
@@ -128,7 +128,7 @@ export const updateDailyIssue = async (req, res) => {
 // unbounded, date-filtered counterpart to listDailyIssues (which is capped
 // at 200 for the always-on Issue Log view). Same DailyIssueLog data either
 // way: a closure is already represented here whether it came from a
-// manually-logged entry or an auto-synced status/disruption change.
+// manually-logged entry or an auto-synced live-day change.
 export const listDailyIssuesReport = async (req, res) => {
   const { error, status, issues } = await loadReportRows(req);
   if (error) return res.status(status || 400).json({ message: error });
@@ -179,7 +179,7 @@ export const deleteDailyIssue = async (req, res) => {
   }
   if (issue.autoSyncTag) {
     return res.status(400).json({
-      message: "This entry is auto-synced from the route's live status — change it from Deployment's Live Schedule instead.",
+      message: "This entry is auto-synced from the route's live day — change it from Deployment's Live Schedule instead.",
     });
   }
 

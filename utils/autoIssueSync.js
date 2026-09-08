@@ -12,13 +12,23 @@ export const syncAutoIssuesBulk = async (runCutDays, userId) => {
   const ops = [];
 
   for (const rcd of runCutDays) {
+    const statusDisruptionType =
+      rcd.status === "suspended" ? "Unperformed Duty" : rcd.status === "off" ? "Route Closed" : null;
+
+    // Client Notes is the note field dispatch can actually edit in Live
+    // Schedule. Preserve a legacy disruption-specific note as well when one
+    // exists, but do not repeat it when both fields contain the same text.
+    const notes = [...new Set([rcd.clientNotes, rcd.disruptionNotes].map((value) => value?.trim()).filter(Boolean))]
+      .join(" — ");
+
     ops.push(
       tagOp({
         runCutDay: rcd,
+        // Keep the original tag for compatibility with existing records.
         tag: "status_suspended",
-        shouldExist: rcd.status === "suspended",
-        disruptionType: "Unperformed Duty",
-        notes: "",
+        shouldExist: Boolean(statusDisruptionType),
+        disruptionType: statusDisruptionType,
+        notes,
         userId,
       })
     );
@@ -28,7 +38,7 @@ export const syncAutoIssuesBulk = async (runCutDays, userId) => {
         tag: "disruption_dropdown",
         shouldExist: Boolean(rcd.disruptionType),
         disruptionType: rcd.disruptionType,
-        notes: rcd.disruptionNotes || "",
+        notes,
         userId,
       })
     );
