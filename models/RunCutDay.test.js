@@ -10,7 +10,13 @@ const requiredFields = () => ({
 });
 
 test("RunCutDay accepts each live-day disposition", async () => {
-  for (const disposition of ["deployed_on_time", "deployed_late", "deployed_stby", "reallocated"]) {
+  for (const disposition of [
+    "deployed_on_time",
+    "deployed_late",
+    "deployed_stby",
+    "reallocated",
+    "closed_suspended",
+  ]) {
     const runCutDay = new RunCutDay({ ...requiredFields(), disposition });
     await runCutDay.validate();
   }

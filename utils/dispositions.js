@@ -5,4 +5,5 @@ export const DISPOSITION_TYPES = [
   "deployed_late",
   STANDBY_DISPOSITION,
   "reallocated",
+  "closed_suspended",
 ];
