@@ -6,7 +6,11 @@ import { computeHours } from "../utils/hours.js";
 import { getEffectiveThresholds } from "../utils/thresholds.js";
 import { syncAutoIssuesBulk } from "../utils/autoIssueSync.js";
 import { OSR_DISRUPTION_TYPE } from "../utils/disruptionTypes.js";
-import { DISPOSITION_TYPES, STANDBY_DISPOSITION } from "../utils/dispositions.js";
+import {
+  DISPOSITION_TYPES,
+  STANDBY_DISPOSITION,
+  syncDispositionWithStatus,
+} from "../utils/dispositions.js";
 import { logDeploymentActivity } from "../utils/deploymentActivityLog.js";
 import {
   resolveOperator,
@@ -177,6 +181,11 @@ export const updateRunCutDayException = async (req, res) => {
     runCutDay.status = status;
     runCutDay.overrides.status = true;
     changeDescriptions.push(`status to ${status}`);
+    if (syncDispositionWithStatus(runCutDay, status)) {
+      changeDescriptions.push(
+        status === "suspended" ? "disposition to closed/suspended" : "cleared automatic disposition"
+      );
+    }
   }
   if (clientNotes !== undefined) {
     runCutDay.clientNotes = clientNotes;
@@ -197,6 +206,12 @@ export const updateRunCutDayException = async (req, res) => {
       if (disposition !== runCutDay.disposition) {
         return res.status(400).json({
           message: "Remove the standby coverage before changing this route's disposition.",
+        });
+      }
+    } else if (runCutDay.dispositionSource === "status") {
+      if (disposition !== runCutDay.disposition) {
+        return res.status(400).json({
+          message: "Change the route status from Suspended before changing its automatic disposition.",
         });
       }
     } else {
@@ -255,6 +270,7 @@ export const updateRunCutDayException = async (req, res) => {
         ...thresholds,
       });
       tomorrowDay.status = "suspended";
+      syncDispositionWithStatus(tomorrowDay, "suspended");
       tomorrowDay.serviceHours = serviceHours;
       tomorrowDay.revenueHours = revenueHours;
       tomorrowDay.overrides.status = true;

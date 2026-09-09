@@ -79,7 +79,7 @@ const runCutDaySchema = new mongoose.Schema(
     },
     dispositionSource: {
       type: String,
-      enum: ["manual", "standby", null],
+      enum: ["manual", "standby", "status", null],
       default: null,
     },
     // Set only when standby coverage assigned this disposition, allowing

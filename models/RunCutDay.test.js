@@ -33,3 +33,14 @@ test("a new RunCutDay starts without a disposition", () => {
   assert.equal(runCutDay.dispositionSource, null);
   assert.equal(runCutDay.dispositionStandbyDay, null);
 });
+
+test("RunCutDay accepts a status-owned disposition", async () => {
+  const runCutDay = new RunCutDay({
+    ...requiredFields(),
+    status: "suspended",
+    disposition: "closed_suspended",
+    dispositionSource: "status",
+  });
+
+  await runCutDay.validate();
+});
