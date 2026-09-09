@@ -29,3 +29,23 @@ export const syncDispositionWithStatus = (runCutDay, status) => {
 
   return false;
 };
+
+// The same invariant applies in the other direction: choosing the
+// Closed/Suspended outcome makes Suspended the live-day status and lets the
+// status own the disposition from then on.
+export const syncStatusWithDisposition = (runCutDay, disposition) => {
+  if (disposition !== CLOSED_SUSPENDED_DISPOSITION) return false;
+
+  runCutDay.status = "suspended";
+  syncDispositionWithStatus(runCutDay, "suspended");
+  return true;
+};
+
+// Covering a route with standby means that duty is operating. Keep the
+// route's status and final outcome aligned in the same update.
+export const activateRouteWithStandbyCoverage = (runCutDay, standbyRunCutDayId) => {
+  runCutDay.status = "active";
+  runCutDay.disposition = STANDBY_DISPOSITION;
+  runCutDay.dispositionSource = "standby";
+  runCutDay.dispositionStandbyDay = standbyRunCutDayId;
+};

@@ -7,9 +7,12 @@ import { getEffectiveThresholds } from "../utils/thresholds.js";
 import { syncAutoIssuesBulk } from "../utils/autoIssueSync.js";
 import { OSR_DISRUPTION_TYPE } from "../utils/disruptionTypes.js";
 import {
+  activateRouteWithStandbyCoverage,
+  CLOSED_SUSPENDED_DISPOSITION,
   DISPOSITION_TYPES,
   STANDBY_DISPOSITION,
   syncDispositionWithStatus,
+  syncStatusWithDisposition,
 } from "../utils/dispositions.js";
 import { logDeploymentActivity } from "../utils/deploymentActivityLog.js";
 import {
@@ -141,11 +144,21 @@ export const setRunCutDayDeployed = async (req, res) => {
   }
 
   if (deployed && coveredRunCutDay) {
-    coveredRunCutDay.disposition = STANDBY_DISPOSITION;
-    coveredRunCutDay.dispositionSource = "standby";
-    coveredRunCutDay.dispositionStandbyDay = runCutDay._id;
+    activateRouteWithStandbyCoverage(coveredRunCutDay, runCutDay._id);
+    coveredRunCutDay.overrides.status = true;
+    const divisionDoc = await Division.findById(runCutDay.division);
+    const thresholds = await getEffectiveThresholds(divisionDoc);
+    const { serviceHours, revenueHours } = computeHours({
+      startTime: coveredRunCutDay.startTime,
+      endTime: coveredRunCutDay.endTime,
+      status: coveredRunCutDay.status,
+      ...thresholds,
+    });
+    coveredRunCutDay.serviceHours = serviceHours;
+    coveredRunCutDay.revenueHours = revenueHours;
     coveredRunCutDay.updatedBy = req.user._id;
     await coveredRunCutDay.save();
+    await syncAutoIssuesBulk([coveredRunCutDay], req.user._id);
   }
 
   logDeploymentActivity({
@@ -177,9 +190,11 @@ export const updateRunCutDayException = async (req, res) => {
 
   const { status, clientNotes, disruptionType, disruptionNotes, disposition } = req.body;
   const changeDescriptions = [];
+  let statusWasUpdated = false;
   if (status !== undefined) {
     runCutDay.status = status;
     runCutDay.overrides.status = true;
+    statusWasUpdated = true;
     changeDescriptions.push(`status to ${status}`);
     if (syncDispositionWithStatus(runCutDay, status)) {
       changeDescriptions.push(
@@ -208,6 +223,12 @@ export const updateRunCutDayException = async (req, res) => {
           message: "Remove the standby coverage before changing this route's disposition.",
         });
       }
+    } else if (disposition === CLOSED_SUSPENDED_DISPOSITION) {
+      const wasSuspended = runCutDay.status === "suspended";
+      syncStatusWithDisposition(runCutDay, disposition);
+      runCutDay.overrides.status = true;
+      statusWasUpdated = true;
+      if (!wasSuspended) changeDescriptions.push("status to suspended");
     } else if (runCutDay.dispositionSource === "status") {
       if (disposition !== runCutDay.disposition) {
         return res.status(400).json({
@@ -222,8 +243,8 @@ export const updateRunCutDayException = async (req, res) => {
     changeDescriptions.push(`disposition to ${disposition || "not dispositioned"}`);
   }
 
-  const divisionDoc = status !== undefined ? await Division.findById(runCutDay.division) : null;
-  if (status !== undefined) {
+  const divisionDoc = statusWasUpdated ? await Division.findById(runCutDay.division) : null;
+  if (statusWasUpdated) {
     const thresholds = await getEffectiveThresholds(divisionDoc);
     const { serviceHours, revenueHours } = computeHours({
       startTime: runCutDay.startTime,
