@@ -52,6 +52,10 @@ export const projectAssignment = async (runCut, userId, { horizonDays = PROJECTI
     const removableIds = removable.map((r) => r._id);
     if (removableIds.length) {
       await DailyIssueLog.deleteMany({ runCutDay: { $in: removableIds }, autoSyncTag: { $ne: null } });
+      await RunCutDay.updateMany(
+        { dispositionSource: "standby", dispositionStandbyDay: { $in: removableIds } },
+        { $set: { disposition: null, dispositionSource: null, dispositionStandbyDay: null } }
+      );
       await RunCutDay.deleteMany({ _id: { $in: removableIds } });
     }
   }

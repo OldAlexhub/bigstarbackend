@@ -6,6 +6,7 @@ import { computeHours } from "../utils/hours.js";
 import { getEffectiveThresholds } from "../utils/thresholds.js";
 import { syncAutoIssuesBulk } from "../utils/autoIssueSync.js";
 import { OSR_DISRUPTION_TYPE } from "../utils/disruptionTypes.js";
+import { DISPOSITION_TYPES, STANDBY_DISPOSITION } from "../utils/dispositions.js";
 import { logDeploymentActivity } from "../utils/deploymentActivityLog.js";
 import {
   resolveOperator,
@@ -66,7 +67,9 @@ export const setRunCutDayDeployed = async (req, res) => {
   }
 
   const deployed = Boolean(req.body.deployed);
+  const previousCoveringRoute = runCutDay.coveringRoute;
   let coveringRouteCode = null;
+  let coveredRunCutDay = null;
   if (deployed) {
     const { coveringRoute } = req.body;
     if (!coveringRoute) {
@@ -74,6 +77,30 @@ export const setRunCutDayDeployed = async (req, res) => {
     }
     const routeDoc = await Route.findOne({ _id: coveringRoute, division: runCutDay.division });
     if (!routeDoc) return res.status(400).json({ message: "That route isn't in this division." });
+    if (routeDoc.type === "standby") {
+      return res.status(400).json({ message: "A standby can only cover a scheduled route." });
+    }
+
+    coveredRunCutDay = await RunCutDay.findOne({
+      division: runCutDay.division,
+      route: routeDoc._id,
+      date: runCutDay.date,
+    });
+    if (!coveredRunCutDay) {
+      return res.status(400).json({ message: "That route is not scheduled on this date." });
+    }
+
+    const duplicateCoverage = await RunCutDay.findOne({
+      _id: { $ne: runCutDay._id },
+      division: runCutDay.division,
+      date: runCutDay.date,
+      deployed: true,
+      coveringRoute: routeDoc._id,
+    });
+    if (duplicateCoverage) {
+      return res.status(409).json({ message: "That route is already covered by another standby." });
+    }
+
     runCutDay.coveringRoute = routeDoc._id;
     coveringRouteCode = routeDoc.code;
   } else {
@@ -83,6 +110,39 @@ export const setRunCutDayDeployed = async (req, res) => {
   runCutDay.deployed = deployed;
   runCutDay.updatedBy = req.user._id;
   await runCutDay.save();
+
+  const coverageChanged =
+    previousCoveringRoute &&
+    (!deployed || String(previousCoveringRoute) !== String(runCutDay.coveringRoute));
+
+  if (coverageChanged) {
+    await RunCutDay.updateOne(
+      {
+        division: runCutDay.division,
+        route: previousCoveringRoute,
+        date: runCutDay.date,
+        disposition: STANDBY_DISPOSITION,
+        dispositionSource: "standby",
+        dispositionStandbyDay: runCutDay._id,
+      },
+      {
+        $set: {
+          disposition: null,
+          dispositionSource: null,
+          dispositionStandbyDay: null,
+          updatedBy: req.user._id,
+        },
+      }
+    );
+  }
+
+  if (deployed && coveredRunCutDay) {
+    coveredRunCutDay.disposition = STANDBY_DISPOSITION;
+    coveredRunCutDay.dispositionSource = "standby";
+    coveredRunCutDay.dispositionStandbyDay = runCutDay._id;
+    coveredRunCutDay.updatedBy = req.user._id;
+    await coveredRunCutDay.save();
+  }
 
   logDeploymentActivity({
     division: runCutDay.division,
@@ -97,7 +157,8 @@ export const setRunCutDayDeployed = async (req, res) => {
   res.json({ runCutDay: populated });
 };
 
-// Deployment's day-specific exception path: Status/Client Notes/Disruption
+// Deployment's day-specific exception path: Status/Client Notes/Disruption/
+// Disposition
 // set here apply only to this date and are protected from the next
 // projectAssignment run (server/utils/projectAssignment.js), which leaves
 // an overridden field alone instead of replacing it with whatever the
@@ -110,7 +171,7 @@ export const updateRunCutDayException = async (req, res) => {
     return res.status(403).json({ message: "No access to this division" });
   }
 
-  const { status, clientNotes, disruptionType, disruptionNotes } = req.body;
+  const { status, clientNotes, disruptionType, disruptionNotes, disposition } = req.body;
   const changeDescriptions = [];
   if (status !== undefined) {
     runCutDay.status = status;
@@ -127,6 +188,23 @@ export const updateRunCutDayException = async (req, res) => {
     if (disruptionNotes !== undefined) runCutDay.disruptionNotes = disruptionNotes;
     runCutDay.overrides.disruption = true;
     changeDescriptions.push(`disruption to ${disruptionType ?? runCutDay.disruptionType ?? "—"}`);
+  }
+  if (disposition !== undefined) {
+    if (disposition !== null && !DISPOSITION_TYPES.includes(disposition)) {
+      return res.status(400).json({ message: "Invalid disposition." });
+    }
+    if (runCutDay.dispositionSource === "standby") {
+      if (disposition !== runCutDay.disposition) {
+        return res.status(400).json({
+          message: "Remove the standby coverage before changing this route's disposition.",
+        });
+      }
+    } else {
+      runCutDay.disposition = disposition || null;
+      runCutDay.dispositionSource = disposition ? "manual" : null;
+      runCutDay.dispositionStandbyDay = null;
+    }
+    changeDescriptions.push(`disposition to ${disposition || "not dispositioned"}`);
   }
 
   const divisionDoc = status !== undefined ? await Division.findById(runCutDay.division) : null;

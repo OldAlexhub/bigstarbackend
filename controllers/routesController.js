@@ -65,6 +65,10 @@ export const deleteRoute = async (req, res) => {
   const futureRunCutDays = await RunCutDay.find({ route: route._id, date: { $gte: today } });
   const futureIds = futureRunCutDays.map((rcd) => rcd._id);
   await DailyIssueLog.deleteMany({ runCutDay: { $in: futureIds }, autoSyncTag: { $ne: null } });
+  await RunCutDay.updateMany(
+    { dispositionSource: "standby", dispositionStandbyDay: { $in: futureIds } },
+    { $set: { disposition: null, dispositionSource: null, dispositionStandbyDay: null } }
+  );
   await RunCutDay.deleteMany({ _id: { $in: futureIds } });
   await RunCut.deleteOne({ route: route._id });
 

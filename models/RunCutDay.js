@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { RUN_CUT_STATUSES } from "../utils/hours.js";
 import { DISRUPTION_TYPES } from "../utils/disruptionTypes.js";
+import { DISPOSITION_TYPES } from "../utils/dispositions.js";
 
 const runCutDaySchema = new mongoose.Schema(
   {
@@ -68,6 +69,25 @@ const runCutDaySchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: "",
+    },
+    // The route's final outcome for this specific live day. This is kept
+    // separate from disruptionType, which remains an Issue Log category.
+    disposition: {
+      type: String,
+      enum: [...DISPOSITION_TYPES, null],
+      default: null,
+    },
+    dispositionSource: {
+      type: String,
+      enum: ["manual", "standby", null],
+      default: null,
+    },
+    // Set only when standby coverage assigned this disposition, allowing
+    // that exact assignment to safely clear it when coverage is removed.
+    dispositionStandbyDay: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RunCutDay",
+      default: null,
     },
     deployed: {
       type: Boolean,
