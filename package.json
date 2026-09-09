@@ -8,7 +8,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "migrate:daily-issue-dedup": "node scripts/dedupeAutoIssues.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

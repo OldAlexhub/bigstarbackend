@@ -3,9 +3,27 @@ import DailyIssueLog from "../models/DailyIssueLog.js";
 import Division from "../models/Division.js";
 import { canAccessDivision } from "../middleware/access.js";
 import { logDeploymentActivity } from "../utils/deploymentActivityLog.js";
+import { parseInclusiveDateRange } from "../utils/dateRange.js";
 
 const REPORT_HEADERS = ["Date", "Route", "Operator", "Disruption", "Notes"];
 const toISODate = (date) => new Date(date).toISOString().slice(0, 10);
+const DUPLICATE_ISSUE_MESSAGE =
+  "An issue already exists for this date, route, operator, and disruption type.";
+
+const issueIdentity = ({ division, route, operator, date, disruptionType }) => ({
+  division,
+  route: route || null,
+  operator: operator || null,
+  date,
+  disruptionType,
+});
+
+const promoteAutoIssue = (issueId, notes, userId) =>
+  DailyIssueLog.findOneAndUpdate(
+    { _id: issueId, autoSyncTag: { $ne: null } },
+    { $set: { autoSyncTag: null, notes, createdBy: userId } },
+    { new: true }
+  );
 
 const loadReportRows = async (req) => {
   const { division, from, to } = req.query;
@@ -19,9 +37,12 @@ const loadReportRows = async (req) => {
   const divisionDoc = await Division.findById(division);
   if (!divisionDoc) return { error: "Division not found", status: 404 };
 
+  const range = parseInclusiveDateRange(from, to);
+  if (range.error) return { error: range.error };
+
   const issues = await DailyIssueLog.find({
     division,
-    date: { $gte: new Date(from), $lte: new Date(to) },
+    date: { $gte: range.fromInclusive, $lt: range.toExclusive },
   })
     .populate("route", "code")
     .populate("operator", "name")
@@ -40,9 +61,12 @@ export const listDailyIssues = async (req, res) => {
 
   const query = { division };
   if (from || to) {
-    query.date = {};
-    if (from) query.date.$gte = new Date(from);
-    if (to) query.date.$lte = new Date(to);
+    if (!from || !to) {
+      return res.status(400).json({ message: "from and to are required together" });
+    }
+    const range = parseInclusiveDateRange(from, to);
+    if (range.error) return res.status(400).json({ message: range.error });
+    query.date = { $gte: range.fromInclusive, $lt: range.toExclusive };
   }
 
   const issues = await DailyIssueLog.find(query)
@@ -59,15 +83,45 @@ export const createDailyIssue = async (req, res) => {
     return res.status(403).json({ message: "No access to this division" });
   }
 
-  const issue = await DailyIssueLog.create({
+  const parsedDate = parseInclusiveDateRange(date, date);
+  if (parsedDate.error) return res.status(400).json({ message: parsedDate.error });
+
+  const identity = issueIdentity({
     division,
-    route: route || null,
-    operator: operator || null,
-    date,
+    route,
+    operator,
+    date: parsedDate.fromInclusive,
     disruptionType,
-    notes,
-    createdBy: req.user._id,
   });
+
+  let issue = await DailyIssueLog.findOne(identity);
+  if (issue && !issue.autoSyncTag) {
+    return res.status(409).json({ message: DUPLICATE_ISSUE_MESSAGE });
+  }
+
+  if (issue) {
+    // A manual entry is the operator's authoritative version. Promote the
+    // matching generated row in place so its RunCutDay provenance remains
+    // available, while clearing the auto tag makes the row editable.
+    issue = await promoteAutoIssue(issue._id, notes, req.user._id);
+    if (!issue) return res.status(409).json({ message: DUPLICATE_ISSUE_MESSAGE });
+  } else {
+    try {
+      issue = await DailyIssueLog.create({
+        ...identity,
+        notes,
+        createdBy: req.user._id,
+      });
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+      const conflictingIssue = await DailyIssueLog.findOne(identity);
+      if (!conflictingIssue || !conflictingIssue.autoSyncTag) {
+        return res.status(409).json({ message: DUPLICATE_ISSUE_MESSAGE });
+      }
+      issue = await promoteAutoIssue(conflictingIssue._id, notes, req.user._id);
+      if (!issue) return res.status(409).json({ message: DUPLICATE_ISSUE_MESSAGE });
+    }
+  }
   await issue.populate([
     { path: "route", select: "code" },
     { path: "operator", select: "name" },
@@ -77,7 +131,7 @@ export const createDailyIssue = async (req, res) => {
     division,
     user: req.user,
     action: "issue.created",
-    summary: `Logged "${disruptionType}" for ${issue.route?.code || "no route"} on ${toISODate(date)}`,
+    summary: `Logged "${disruptionType}" for ${issue.route?.code || "no route"} on ${toISODate(issue.date)}`,
   });
 
   res.status(201).json({ issue });
@@ -102,9 +156,26 @@ export const updateDailyIssue = async (req, res) => {
   }
 
   const { route, operator, date, disruptionType, notes } = req.body;
+  let normalizedDate = issue.date;
+  if (date !== undefined) {
+    const parsedDate = parseInclusiveDateRange(date, date);
+    if (parsedDate.error) return res.status(400).json({ message: parsedDate.error });
+    normalizedDate = parsedDate.fromInclusive;
+  }
+
+  const nextIdentity = issueIdentity({
+    division: issue.division,
+    route: route !== undefined ? route : issue.route,
+    operator: operator !== undefined ? operator : issue.operator,
+    date: normalizedDate,
+    disruptionType: disruptionType !== undefined ? disruptionType : issue.disruptionType,
+  });
+  const duplicate = await DailyIssueLog.findOne({ ...nextIdentity, _id: { $ne: issue._id } });
+  if (duplicate) return res.status(409).json({ message: DUPLICATE_ISSUE_MESSAGE });
+
   if (route !== undefined) issue.route = route || null;
   if (operator !== undefined) issue.operator = operator || null;
-  if (date !== undefined) issue.date = date;
+  if (date !== undefined) issue.date = normalizedDate;
   if (disruptionType !== undefined) issue.disruptionType = disruptionType;
   if (notes !== undefined) issue.notes = notes;
 

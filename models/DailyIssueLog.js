@@ -52,7 +52,14 @@ const dailyIssueLogSchema = new mongoose.Schema(
 );
 
 dailyIssueLogSchema.index({ division: 1, date: 1 });
-dailyIssueLogSchema.index({ runCutDay: 1, autoSyncTag: 1 });
+dailyIssueLogSchema.index({ runCutDay: 1 });
+dailyIssueLogSchema.index(
+  { division: 1, date: 1, route: 1, operator: 1, disruptionType: 1 },
+  {
+    name: "uniq_issue_identity",
+    unique: true,
+  }
+);
 
 const DailyIssueLog = mongoose.model("DailyIssueLog", dailyIssueLogSchema);
 

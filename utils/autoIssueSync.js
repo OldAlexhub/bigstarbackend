@@ -1,76 +1,149 @@
 import DailyIssueLog from "../models/DailyIssueLog.js";
 
-// Keeps Deployment's Issue Log in sync with a route's live status/disruption
-// (as projected onto each date's RunCutDay), so anything set there is
-// visible in one place and counted by Network Success's KPI math — without
-// requiring separate manual entry. Each auto-synced record is tied to its
-// RunCutDay + a tag identifying which field produced it, so it can be found
-// and updated/removed idempotently without colliding with manually-logged
-// entries. Batched via bulkWrite since this runs across every projected day
-// whenever an assignment changes, not just one record at a time.
-export const syncAutoIssuesBulk = async (runCutDays, userId) => {
+const objectIdString = (value) => String(value?._id || value || "");
+
+const identityKey = ({ division, date, route, operator, disruptionType }) =>
+  [
+    objectIdString(division),
+    new Date(date).toISOString(),
+    objectIdString(route),
+    objectIdString(operator),
+    disruptionType,
+  ].join("|");
+
+const identityFilter = ({ runCutDay, disruptionType }) => ({
+  division: runCutDay.division,
+  date: runCutDay.date,
+  route: runCutDay.route,
+  operator: runCutDay.operator || null,
+  disruptionType,
+});
+
+const desiredIssuesFor = (runCutDay) => {
+  const desired = new Map();
+  const statusDisruptionType =
+    runCutDay.status === "suspended"
+      ? "Unperformed Duty"
+      : runCutDay.status === "off"
+      ? "Route Closed"
+      : null;
+
+  // Status takes precedence as the retained provenance tag when status and
+  // the disruption dropdown resolve to the same visible issue identity.
+  if (statusDisruptionType) {
+    desired.set(statusDisruptionType, { disruptionType: statusDisruptionType, tag: "status_suspended" });
+  }
+  if (runCutDay.disruptionType && !desired.has(runCutDay.disruptionType)) {
+    desired.set(runCutDay.disruptionType, {
+      disruptionType: runCutDay.disruptionType,
+      tag: "disruption_dropdown",
+    });
+  }
+
+  return [...desired.values()];
+};
+
+const isDuplicateKeyOnlyError = (error) => {
+  const writeErrors = error?.writeErrors || error?.result?.getWriteErrors?.() || [];
+  const writeConcernErrors = error?.writeConcernErrors || error?.result?.getWriteConcernErrors?.() || [];
+  if (writeConcernErrors.length) return false;
+  if (writeErrors.length) return writeErrors.every((writeError) => writeError.code === 11000);
+  return error?.code === 11000;
+};
+
+const syncAutoIssues = async (runCutDays, userId, canRetry) => {
+  const plans = runCutDays.map((runCutDay) => ({
+    runCutDay,
+    desired: desiredIssuesFor(runCutDay),
+  }));
+  const identities = plans.flatMap(({ runCutDay, desired }) =>
+    desired.map(({ disruptionType }) => identityFilter({ runCutDay, disruptionType }))
+  );
+
+  // Manual entries are authoritative. Discover them before building the
+  // generated writes so matching automatic rows are removed instead of
+  // recreated under a different source tag.
+  const manualIssues = identities.length
+    ? await DailyIssueLog.find({ autoSyncTag: null, $or: identities })
+        .select("division date route operator disruptionType")
+        .lean()
+    : [];
+  const manualKeys = new Set(manualIssues.map(identityKey));
   const ops = [];
 
-  for (const rcd of runCutDays) {
-    const statusDisruptionType =
-      rcd.status === "suspended" ? "Unperformed Duty" : rcd.status === "off" ? "Route Closed" : null;
-
-    // Client Notes is the note field dispatch can actually edit in Live
-    // Schedule. Preserve a legacy disruption-specific note as well when one
-    // exists, but do not repeat it when both fields contain the same text.
-    const notes = [...new Set([rcd.clientNotes, rcd.disruptionNotes].map((value) => value?.trim()).filter(Boolean))]
-      .join(" — ");
-
-    ops.push(
-      tagOp({
-        runCutDay: rcd,
-        // Keep the original tag for compatibility with existing records.
-        tag: "status_suspended",
-        shouldExist: Boolean(statusDisruptionType),
-        disruptionType: statusDisruptionType,
-        notes,
-        userId,
-      })
-    );
-    ops.push(
-      tagOp({
-        runCutDay: rcd,
-        tag: "disruption_dropdown",
-        shouldExist: Boolean(rcd.disruptionType),
-        disruptionType: rcd.disruptionType,
-        notes,
-        userId,
-      })
-    );
-  }
-
-  if (ops.length) await DailyIssueLog.bulkWrite(ops);
-};
-
-const tagOp = ({ runCutDay, tag, shouldExist, disruptionType, notes, userId }) => {
-  const filter = { runCutDay: runCutDay._id, autoSyncTag: tag };
-
-  if (!shouldExist) {
-    return { deleteOne: { filter } };
-  }
-
-  return {
-    updateOne: {
-      filter,
-      update: {
-        $set: {
-          division: runCutDay.division,
-          route: runCutDay.route,
-          operator: runCutDay.operator || null,
-          date: runCutDay.date,
-          disruptionType,
-          notes,
-          createdBy: userId,
+  for (const { runCutDay, desired } of plans) {
+    const desiredTypes = desired.map(({ disruptionType }) => disruptionType);
+    ops.push({
+      deleteMany: {
+        filter: {
           runCutDay: runCutDay._id,
-          autoSyncTag: tag,
+          autoSyncTag: { $ne: null },
+          ...(desiredTypes.length ? { disruptionType: { $nin: desiredTypes } } : {}),
         },
       },
-      upsert: true,
-    },
-  };
+    });
+
+    const notes = [
+      ...new Set(
+        [runCutDay.clientNotes, runCutDay.disruptionNotes]
+          .map((value) => value?.trim())
+          .filter(Boolean)
+      ),
+    ].join(" — ");
+
+    for (const { disruptionType, tag } of desired) {
+      const identity = identityFilter({ runCutDay, disruptionType });
+      if (manualKeys.has(identityKey(identity))) {
+        ops.push({
+          deleteMany: {
+            filter: {
+              runCutDay: runCutDay._id,
+              autoSyncTag: { $ne: null },
+              disruptionType,
+            },
+          },
+        });
+        continue;
+      }
+
+      ops.push({
+        updateOne: {
+          filter: {
+            runCutDay: runCutDay._id,
+            autoSyncTag: { $ne: null },
+            disruptionType,
+          },
+          update: {
+            $set: {
+              ...identity,
+              notes,
+              createdBy: userId,
+              runCutDay: runCutDay._id,
+              autoSyncTag: tag,
+            },
+          },
+          upsert: true,
+        },
+      });
+    }
+  }
+
+  if (!ops.length) return;
+
+  try {
+    await DailyIssueLog.bulkWrite(ops, { ordered: false });
+  } catch (error) {
+    // Rebuild the batch once after a uniqueness race. This is important when
+    // the winning concurrent write is manual: the fresh lookup sees it and
+    // replaces the automatic upsert with a cleanup operation.
+    if (!canRetry || !isDuplicateKeyOnlyError(error)) throw error;
+    await syncAutoIssues(runCutDays, userId, false);
+  }
 };
+
+// Keeps Deployment's Issue Log synchronized with a live RunCutDay while
+// producing at most one row for each visible issue identity. Status and the
+// disruption dropdown may both describe the same event; those sources are
+// collapsed before writing, and an existing manual record always wins.
+export const syncAutoIssuesBulk = async (runCutDays, userId) =>
+  syncAutoIssues(runCutDays, userId, true);
