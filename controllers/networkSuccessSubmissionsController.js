@@ -45,6 +45,7 @@ const submissionJson = (submission) => ({
   warnings: submission.warnings,
   counts: submission.counts,
   confirmedAt: submission.confirmedAt,
+  reopenedFrom: submission.reopenedFrom,
   createdAt: submission.createdAt,
   updatedAt: submission.updatedAt,
   createdBy: submission.createdBy,
@@ -471,6 +472,7 @@ export const listSubmissions = async (req, res) => {
   const filter = req.user.role === "ELT"
     ? {}
     : { $or: [{ division: { $in: req.user.divisionAccess } }, { createdBy: req.user._id }] };
+  filter.status = { $ne: "removed" };
   if (req.query.division) {
     if (!canAccessDivision(req.user, req.query.division)) return res.status(403).json({ message: "No access to this division" });
     filter.division = req.query.division;
@@ -484,6 +486,88 @@ export const listSubmissions = async (req, res) => {
     .limit(25)
     .lean();
   res.json({ submissions: submissions.map((submission) => ({ ...submission, id: id(submission) })) });
+};
+
+export const removeSubmission = async (req, res) => {
+  const submission = await NetworkSubmission.findById(req.params.id);
+  const accessError = ensureSubmissionAccess(req, submission);
+  if (accessError) return res.status(accessError.status).json({ message: accessError.message });
+  if (submission.status === "removed") return res.status(409).json({ message: "This submission has already been removed." });
+
+  const activeEntries = submission.status === "confirmed"
+    ? await NetworkKpiEntry.find({ submission: submission._id }).lean()
+    : [];
+  if (activeEntries.length) await NetworkKpiEntry.deleteMany({ submission: submission._id });
+
+  const removedAt = new Date();
+  submission.changeAudit.push({
+    action: "submission_removed",
+    changedAt: removedAt,
+    changedBy: req.user._id,
+    previousStatus: submission.status,
+    removedEntries: activeEntries,
+  });
+  submission.status = "removed";
+  submission.removedAt = removedAt;
+  submission.removedBy = req.user._id;
+  submission.parsedRows = [];
+  submission.previewRows = [];
+  await submission.save();
+
+  res.json({
+    message: activeEntries.length
+      ? "Submission and its active Network Success records were removed. You can upload the corrected files now."
+      : "Submission removed. You can upload the files again now.",
+    removedEntries: activeEntries.length,
+  });
+};
+
+export const reopenSubmission = async (req, res) => {
+  const original = await NetworkSubmission.findById(req.params.id);
+  const accessError = ensureSubmissionAccess(req, original);
+  if (accessError) return res.status(accessError.status).json({ message: accessError.message });
+  if (original.status === "removed") return res.status(409).json({ message: "Removed submissions cannot be reopened. Upload the workbook again instead." });
+  if (!original.parsedRows?.length) return res.status(409).json({ message: "This submission has no retained parsed rows to reopen." });
+
+  if (original.status !== "confirmed") {
+    return res.json({ submission: submissionJson(original), reopened: false });
+  }
+
+  let revision = await NetworkSubmission.findOne({
+    reopenedFrom: original._id,
+    status: { $in: ["pending", "matched"] },
+  });
+  let created = false;
+  if (!revision) {
+    revision = await NetworkSubmission.create({
+      source: original.source,
+      status: "pending",
+      files: original.files.map((file) => file.toObject?.() || file),
+      division: original.division,
+      divisionCandidates: original.divisionCandidates,
+      parsedRows: original.parsedRows,
+      previewRows: [],
+      blockedDates: original.blockedDates,
+      reportDates: original.reportDates,
+      warnings: original.warnings,
+      createdBy: req.user._id,
+      reopenedFrom: original._id,
+      counts: {
+        sourceRows: original.counts?.sourceRows || original.parsedRows.length,
+        zeroTripRows: original.counts?.zeroTripRows || 0,
+      },
+    });
+    original.changeAudit.push({
+      action: "reopened_as_revision",
+      changedAt: new Date(),
+      changedBy: req.user._id,
+      revision: revision._id,
+    });
+    await original.save();
+    created = true;
+  }
+
+  return res.status(created ? 201 : 200).json({ submission: submissionJson(revision), reopened: true });
 };
 
 export const listEntries = async (req, res) => {

@@ -4,8 +4,10 @@ import Division from "../models/Division.js";
 import RunCut from "../models/RunCut.js";
 import RunCutDay from "../models/RunCutDay.js";
 import DailyIssueLog from "../models/DailyIssueLog.js";
+import NetworkKpiEntry from "../models/NetworkKpiEntry.js";
 import { divisionFilter } from "../middleware/access.js";
 import { addDays, emptyMetrics, accumulate, coveragePct, runCutFulfillmentPct } from "../utils/weeklyMetrics.js";
+import { actualRevenueFulfillment, combineActualRevenue } from "../utils/actualRevenueFulfillment.js";
 import { pdfPageLeft, drawPdfTable } from "../utils/pdfTable.js";
 
 const iso = (d) => new Date(d).toISOString().slice(0, 10);
@@ -91,10 +93,15 @@ const computeReport = async (req, from, to, divisionIds) => {
 
   const perDivision = await Promise.all(
     divisions.map(async (division) => {
-      const [runCutDays, issues, unassignedRunCuts] = await Promise.all([
+      const [runCutDays, issues, runCuts, networkEntries] = await Promise.all([
         RunCutDay.find({ division: division._id, date: { $gte: from, $lte: to } }).populate("route", "type"),
         DailyIssueLog.find({ division: division._id, date: { $gte: from, $lte: to } }).populate("route", "code"),
-        RunCut.find({ division: division._id, status: "unassigned" }).populate("route", "code type"),
+        RunCut.find({ division: division._id }).populate("route", "code type"),
+        NetworkKpiEntry.find({
+          division: division._id,
+          date: { $gte: iso(from), $lte: iso(to) },
+          "metrics.reportedRevenueHours": { $ne: null },
+        }).select("route metrics.reportedRevenueHours deployment.scheduledRevenueHours"),
       ]);
 
       allRunCutDays.push(...runCutDays);
@@ -105,9 +112,17 @@ const computeReport = async (req, from, to, divisionIds) => {
         accumulate(metrics, rcd);
       });
 
-      const unassignedRoutes = unassignedRunCuts
+      const unassignedRoutes = runCuts
+        .filter((rc) => rc.status === "unassigned")
         .filter((rc) => rc.route && rc.route.type !== "standby")
         .map((rc) => ({ routeId: rc.route._id, routeCode: rc.route.code }));
+      const plannedRevenueByRoute = new Map(
+        runCuts
+          .filter((rc) => rc.route && rc.route.type !== "standby" && Number.isFinite(rc.revenueHours))
+          .map((rc) => [String(rc.route._id), rc.revenueHours])
+      );
+      const actualRevenue = actualRevenueFulfillment(networkEntries, plannedRevenueByRoute);
+      const plannedFulfillment = fulfillmentOrNull(metrics);
 
       const divIssues = issues.map((i) => ({
         issueId: i._id,
@@ -128,7 +143,9 @@ const computeReport = async (req, from, to, divisionIds) => {
         divisionId: division._id,
         code: division.code,
         name: division.name,
-        ...fulfillmentOrNull(metrics),
+        ...plannedFulfillment,
+        plannedRevenueHourFulfillmentPct: plannedFulfillment.revenueHourFulfillmentPct,
+        ...actualRevenue,
         revenueHoursScheduled: round2(metrics.revenueHoursScheduled),
         revenueHoursCovered: round2(metrics.revenueHoursCovered),
         revenueHoursAtRisk: round2(metrics.revenueHoursScheduled - metrics.revenueHoursCovered),
@@ -154,8 +171,11 @@ const computeReport = async (req, from, to, divisionIds) => {
     accumulate(netMetrics, rcd);
   });
 
+  const networkFulfillment = fulfillmentOrNull(netMetrics);
   const networkSummary = {
-    ...fulfillmentOrNull(netMetrics),
+    ...networkFulfillment,
+    plannedRevenueHourFulfillmentPct: networkFulfillment.revenueHourFulfillmentPct,
+    ...combineActualRevenue(perDivision),
     revenueHoursAtRisk: round2(combinedMetrics.revenueHoursScheduled - combinedMetrics.revenueHoursCovered),
     totalClosures: perDivision.reduce((s, d) => s + d.totalClosures, 0),
     totalLateFirst: perDivision.reduce((s, d) => s + d.totalLateFirst, 0),
@@ -208,7 +228,8 @@ const REPORT_HEADERS = {
   divisions: [
     "Division",
     "Run Cut Fulfillment %",
-    "Revenue Hour Fulfillment %",
+    "Planned Revenue Hour Fulfillment %",
+    "Actual Revenue Hour Fulfillment %",
     "Revenue Hours At Risk",
     "Closures",
     "Late to First",
@@ -231,7 +252,10 @@ const toRows = (report) => ({
   summary: [
     ["Date range", `${report.from} to ${report.to}`],
     ["Run Cut Fulfillment %", fmtPct(report.networkSummary.runCutFulfillmentPct)],
-    ["Revenue Hour Fulfillment %", fmtPct(report.networkSummary.revenueHourFulfillmentPct)],
+    ["Planned Revenue Hour Fulfillment %", fmtPct(report.networkSummary.plannedRevenueHourFulfillmentPct)],
+    ["Actual Revenue Hour Fulfillment %", fmtPct(report.networkSummary.actualRevenueHourFulfillmentPct)],
+    ["Actual Revenue Hours", report.networkSummary.actualRevenueHours],
+    ["Comparable Planned Revenue Hours", report.networkSummary.actualRevenueHoursPlanned],
     ["Revenue Hours At Risk", report.networkSummary.revenueHoursAtRisk],
     ["Total Closures", report.networkSummary.totalClosures],
     ["Total Late to First", report.networkSummary.totalLateFirst],
@@ -241,7 +265,8 @@ const toRows = (report) => ({
   divisions: report.divisions.map((d) => [
     d.name,
     fmtPct(d.runCutFulfillmentPct),
-    fmtPct(d.revenueHourFulfillmentPct),
+    fmtPct(d.plannedRevenueHourFulfillmentPct),
+    fmtPct(d.actualRevenueHourFulfillmentPct),
     d.revenueHoursAtRisk,
     d.totalClosures,
     d.totalLateFirst,
@@ -313,18 +338,19 @@ export const exportEltReport = async (req, res) => {
 
   drawTable("Executive Summary", REPORT_HEADERS.summary, rows.summary, [200, 200]);
 
-  const pdfDivisionHeaders = ["Division", "Run Cut Fulfill.", "Rev. Hr Fulfill.", "Hrs At Risk", "Closures", "Late 1st", "Late Dep", "Unassigned"];
+  const pdfDivisionHeaders = ["Division", "Run Cut", "Planned Rev.", "Actual Rev.", "Hrs At Risk", "Closures", "Late 1st", "Late Dep", "Unassigned"];
   const pdfDivisionRows = report.divisions.map((d) => [
     d.name,
     fmtPct(d.runCutFulfillmentPct),
-    fmtPct(d.revenueHourFulfillmentPct),
+    fmtPct(d.plannedRevenueHourFulfillmentPct),
+    fmtPct(d.actualRevenueHourFulfillmentPct),
     d.revenueHoursAtRisk,
     d.totalClosures,
     d.totalLateFirst,
     d.totalLateDeploy,
     d.unassignedRoutesCount,
   ]);
-  drawTable("Per-Division", pdfDivisionHeaders, pdfDivisionRows, [130, 65, 65, 62, 50, 50, 50, 65]);
+  drawTable("Per-Division", pdfDivisionHeaders, pdfDivisionRows, [112, 56, 58, 58, 55, 45, 48, 48, 52]);
 
   doc.addPage();
   drawTable("Issues", REPORT_HEADERS.issues, rows.issues, [110, 60, 60, 100, 190]);

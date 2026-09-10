@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const networkSubmissionSchema = new mongoose.Schema(
   {
     source: { type: String, enum: ["vision", "ecolane"], required: true },
-    status: { type: String, enum: ["pending", "matched", "confirmed", "failed"], default: "pending" },
+    status: { type: String, enum: ["pending", "matched", "confirmed", "failed", "removed"], default: "pending" },
     files: [
       {
         _id: false,
@@ -23,6 +23,9 @@ const networkSubmissionSchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     confirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     confirmedAt: { type: Date, default: null },
+    removedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    removedAt: { type: Date, default: null },
+    reopenedFrom: { type: mongoose.Schema.Types.ObjectId, ref: "NetworkSubmission", default: null },
     counts: {
       sourceRows: { type: Number, default: 0 },
       automaticMatches: { type: Number, default: 0 },
@@ -41,6 +44,7 @@ const networkSubmissionSchema = new mongoose.Schema(
 
 networkSubmissionSchema.index({ createdAt: -1 });
 networkSubmissionSchema.index({ division: 1, source: 1, confirmedAt: -1 });
+networkSubmissionSchema.index({ reopenedFrom: 1, status: 1 });
 
 const NetworkSubmission = mongoose.model("NetworkSubmission", networkSubmissionSchema);
 export default NetworkSubmission;

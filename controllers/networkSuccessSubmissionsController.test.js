@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import NetworkKpiEntry from "../models/NetworkKpiEntry.js";
+import NetworkSubmission from "../models/NetworkSubmission.js";
 import Operator from "../models/Operator.js";
 import Provider from "../models/Provider.js";
 import RunCut from "../models/RunCut.js";
-import { updatePerformanceAssignment } from "./networkSuccessSubmissionsController.js";
+import { removeSubmission, reopenSubmission, updatePerformanceAssignment } from "./networkSuccessSubmissionsController.js";
 
 const response = () => ({
   statusCode: 200,
@@ -102,5 +103,101 @@ test("Network Success assignment corrections are stored separately and audited",
     NetworkKpiEntry.findById = originals.findEntry;
     Operator.findById = originals.findOperator;
     Provider.findById = originals.findProvider;
+  }
+});
+
+test("removing a confirmed submission deletes only its active entries and retains an audit", async () => {
+  const originals = {
+    findSubmission: NetworkSubmission.findById,
+    findEntries: NetworkKpiEntry.find,
+    deleteEntries: NetworkKpiEntry.deleteMany,
+  };
+  const submission = {
+    _id: "submission-1",
+    status: "confirmed",
+    division: "division-1",
+    createdBy: "user-1",
+    parsedRows: [{ id: "raw" }],
+    previewRows: [{ id: "preview" }],
+    changeAudit: [],
+    async save() {},
+  };
+  const entries = [{ _id: "entry-1", submission: "submission-1", date: "2026-09-08" }];
+  let deleteFilter = null;
+  NetworkSubmission.findById = async () => submission;
+  NetworkKpiEntry.find = () => ({ lean: async () => entries });
+  NetworkKpiEntry.deleteMany = async (filter) => { deleteFilter = filter; return { deletedCount: 1 }; };
+  try {
+    const res = response();
+    await removeSubmission(
+      {
+        user: { _id: "user-1", role: "ELT", divisionAccess: [] },
+        params: { id: "submission-1" },
+      },
+      res
+    );
+    assert.deepEqual(deleteFilter, { submission: "submission-1" });
+    assert.equal(submission.status, "removed");
+    assert.equal(submission.changeAudit[0].action, "submission_removed");
+    assert.equal(submission.changeAudit[0].removedEntries.length, 1);
+    assert.deepEqual(submission.parsedRows, []);
+    assert.deepEqual(submission.previewRows, []);
+    assert.equal(res.body.removedEntries, 1);
+  } finally {
+    NetworkSubmission.findById = originals.findSubmission;
+    NetworkKpiEntry.find = originals.findEntries;
+    NetworkKpiEntry.deleteMany = originals.deleteEntries;
+  }
+});
+
+test("opening a confirmed submission creates one editable revision and preserves the original", async () => {
+  const originals = {
+    findSubmission: NetworkSubmission.findById,
+    findRevision: NetworkSubmission.findOne,
+    createSubmission: NetworkSubmission.create,
+  };
+  const original = {
+    _id: "submission-1",
+    source: "vision",
+    status: "confirmed",
+    division: "division-1",
+    createdBy: "user-1",
+    files: [{ kind: "vision", name: "report.xlsx", size: 100, sha256: "hash" }],
+    divisionCandidates: [{ division: "division-1" }],
+    parsedRows: [{ id: "row-1", sourceRoute: "1001" }],
+    blockedDates: [],
+    reportDates: ["2026-09-08"],
+    warnings: [],
+    counts: { sourceRows: 1, zeroTripRows: 0 },
+    changeAudit: [],
+    async save() {},
+  };
+  let createdPayload = null;
+  NetworkSubmission.findById = async () => original;
+  NetworkSubmission.findOne = async () => null;
+  NetworkSubmission.create = async (payload) => {
+    createdPayload = payload;
+    return { _id: "revision-1", ...payload };
+  };
+  try {
+    const res = response();
+    await reopenSubmission(
+      {
+        user: { _id: "user-1", role: "ELT", divisionAccess: [] },
+        params: { id: "submission-1" },
+      },
+      res
+    );
+    assert.equal(res.statusCode, 201);
+    assert.equal(res.body.submission.id, "revision-1");
+    assert.equal(createdPayload.status, "pending");
+    assert.equal(createdPayload.reopenedFrom, "submission-1");
+    assert.deepEqual(createdPayload.parsedRows, original.parsedRows);
+    assert.equal(original.status, "confirmed");
+    assert.equal(original.changeAudit[0].action, "reopened_as_revision");
+  } finally {
+    NetworkSubmission.findById = originals.findSubmission;
+    NetworkSubmission.findOne = originals.findRevision;
+    NetworkSubmission.create = originals.createSubmission;
   }
 });

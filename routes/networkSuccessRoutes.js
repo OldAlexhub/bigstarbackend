@@ -9,6 +9,8 @@ import {
   listSubmissions,
   preprocessSubmission,
   previewSubmission,
+  removeSubmission,
+  reopenSubmission,
   updatePerformanceAssignment,
 } from "../controllers/networkSuccessSubmissionsController.js";
 
@@ -38,6 +40,8 @@ router.use(protect, requireSection("network_success"));
 router.get("/submissions", listSubmissions);
 router.get("/entries", listEntries);
 router.get("/performance", getPerformance);
+router.delete("/submissions/:id", removeSubmission);
+router.post("/submissions/:id/reopen", reopenSubmission);
 router.patch("/entries/:id/assignment", updatePerformanceAssignment);
 router.post("/submissions/preprocess", receiveWorkbooks, preprocessSubmission);
 router.post("/submissions/:id/preview", previewSubmission);
