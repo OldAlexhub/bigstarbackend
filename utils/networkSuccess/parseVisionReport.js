@@ -20,6 +20,9 @@ export const parseVisionReport = (buffer) => {
   const tripsCol = findColumn(header, [/^Total\s+Prov(?:ided)?$/i], "Total Provided trips");
   const otpCol = findColumn(header, [/^OTP\s*%$/i], "OTP %");
   const serviceHoursCol = findColumn(header, [/^Service$/i], "Service Hours", { preferLast: true });
+  const revenueHoursCol = header.reduce((match, value, index) => (
+    /^(?:Reven|Revenue|Revenue\s+Hours?|Rev\s+Hours?)$/i.test(cellText(value).trim()) ? index : match
+  ), null);
   const productivityCol = findColumn(header, [/^Trips\/\s*SvcHr$/i], "Trips per Service Hour");
 
   let currentDate = null;
@@ -35,6 +38,7 @@ export const parseVisionReport = (buffer) => {
 
     const trips = numberValue(row[tripsCol]);
     const serviceHours = numberValue(row[serviceHoursCol]);
+    const revenueHours = revenueHoursCol === null ? null : numberValue(row[revenueHoursCol]);
     const productivity = numberValue(row[productivityCol]);
     const otpPct = percentageValue(row[otpCol]);
     if (trips === null || serviceHours === null || (trips > 0 && otpPct === null)) {
@@ -49,13 +53,14 @@ export const parseVisionReport = (buffer) => {
       sourceOperator: null,
       completedTrips: trips,
       reportedServiceHours: serviceHours,
-      reportedRevenueHours: null,
+      reportedRevenueHours: revenueHours,
       tpsh: productivity,
       otpPct,
       zeroTrips: trips === 0,
       sourceFields: {
         completedTrips: "Vision Total Prov",
         reportedServiceHours: "Vision Service Hours",
+        ...(revenueHoursCol === null ? {} : { reportedRevenueHours: "Vision Revenue Hours" }),
         tpsh: "Vision Trips/SvcHr",
         otpPct: "Vision OTP %",
       },
@@ -63,6 +68,9 @@ export const parseVisionReport = (buffer) => {
   }
 
   if (!rows.length) throw new Error("No Vision route rows were found in the workbook.");
+  if (revenueHoursCol === null) {
+    warnings.push("The Vision report does not contain a Revenue Hours column, so Actual Revenue Hour Fulfillment will be unavailable for these rows.");
+  }
   const costCenterText = grid.flat().map(cellText).find((value) => /Cost\s+Center:/i.test(value)) || "";
   const costCenter = costCenterText.match(/Cost\s+Center:\s*([^\n]*?)(?:\s+Id:|$)/i)?.[1]?.trim() || null;
   return { rows, warnings, costCenter, reportRange: workbookDateRange(grid), blockedDates: [] };

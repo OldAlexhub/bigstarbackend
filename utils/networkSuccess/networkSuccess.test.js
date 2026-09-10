@@ -24,6 +24,7 @@ test("Vision parser reads source metrics, percentages, dates, and zero-trip rows
   header[30] = "OTP %";
   header[33] = "Service";
   header[41] = "Service";
+  header[42] = "Reven";
   const positive = Array(48).fill(null);
   positive[1] = "09/08/2026";
   positive[3] = "1029B";
@@ -31,19 +32,47 @@ test("Vision parser reads source metrics, percentages, dates, and zero-trip rows
   positive[16] = 1.2;
   positive[30] = "91.7%";
   positive[41] = 10;
+  positive[42] = 9.5;
   const zero = Array(48).fill(null);
   zero[3] = "1037A";
   zero[6] = 0;
   zero[16] = 0;
   zero[41] = 0;
+  zero[42] = 0;
   const parsed = parseVisionReport(workbook([["Cost Center: LYNX Id: 661"], header, positive, zero]));
 
   assert.equal(parsed.costCenter, "LYNX");
   assert.equal(parsed.rows.length, 2);
   assert.equal(parsed.rows[0].date, "2026-09-08");
   assert.equal(parsed.rows[0].otpPct, 0.917);
+  assert.equal(parsed.rows[0].reportedServiceHours, 10);
+  assert.equal(parsed.rows[0].reportedRevenueHours, 9.5);
+  assert.equal(parsed.rows[0].sourceFields.reportedRevenueHours, "Vision Revenue Hours");
   assert.equal(parsed.rows[1].zeroTrips, true);
+  assert.equal(parsed.rows[1].reportedRevenueHours, 0);
   assert.equal(parsed.rows[1].otpPct, null);
+});
+
+test("Vision parser keeps older reports usable when Revenue Hours is absent", () => {
+  const header = Array(48).fill(null);
+  header[1] = "Date";
+  header[3] = "Run/Route";
+  header[6] = "Total Prov";
+  header[16] = "Trips/ SvcHr";
+  header[30] = "OTP %";
+  header[41] = "Service";
+  const row = Array(48).fill(null);
+  row[1] = "09/08/2026";
+  row[3] = "1021";
+  row[6] = 13;
+  row[16] = 1.26;
+  row[30] = "100%";
+  row[41] = 10.3;
+
+  const parsed = parseVisionReport(workbook([header, row]));
+
+  assert.equal(parsed.rows[0].reportedRevenueHours, null);
+  assert.match(parsed.warnings.join(" "), /Actual Revenue Hour Fulfillment will be unavailable/);
 });
 
 test("Ecolane parser handles repeated headers and blocks an incomplete whole date", () => {
