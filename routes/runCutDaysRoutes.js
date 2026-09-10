@@ -11,12 +11,12 @@ import {
 
 const router = Router();
 
-router.use(protect, requireAnySection(["master_run_cuts", "deployment"]));
+router.use(protect);
 
-router.get("/", listRunCutDays);
-router.post("/", createExtraRunCutDay);
-router.patch("/:id/deployed", setRunCutDayDeployed);
-router.patch("/:id", updateRunCutDayException);
-router.delete("/:id", deleteExtraRunCutDay);
+router.get("/", requireAnySection(["master_run_cuts", "deployment", "network_success"]), listRunCutDays);
+router.post("/", requireAnySection(["master_run_cuts", "deployment"]), createExtraRunCutDay);
+router.patch("/:id/deployed", requireAnySection(["master_run_cuts", "deployment"]), setRunCutDayDeployed);
+router.patch("/:id", requireAnySection(["master_run_cuts", "deployment"]), updateRunCutDayException);
+router.delete("/:id", requireAnySection(["master_run_cuts", "deployment"]), deleteExtraRunCutDay);
 
 export default router;

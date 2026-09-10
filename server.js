@@ -21,6 +21,7 @@ import homeSummaryRoutes from "./routes/homeSummaryRoutes.js"
 import eltReportingRoutes from "./routes/eltReportingRoutes.js"
 import leaderboardRoutes from "./routes/leaderboardRoutes.js"
 import usersRoutes from "./routes/usersRoutes.js"
+import networkSuccessRoutes from "./routes/networkSuccessRoutes.js"
 import { scheduleWeeklyFinalization } from "./jobs/finalizeWeeks.js"
 import { scheduleAssignmentRollover } from "./jobs/rolloverAssignments.js"
 import {fileURLToPath} from "url"
@@ -64,6 +65,7 @@ app.use("/api/home-summary", homeSummaryRoutes)
 app.use("/api/elt-reporting", eltReportingRoutes)
 app.use("/api/leaderboard", leaderboardRoutes)
 app.use("/api/users", usersRoutes)
+app.use("/api/network-success", networkSuccessRoutes)
 
 const publicDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "public")
 app.use(express.static(publicDirectory))

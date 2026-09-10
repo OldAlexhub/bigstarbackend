@@ -10,11 +10,11 @@ import {
 
 const router = Router();
 
-router.use(protect, requireAnySection(["master_run_cuts", "deployment"]));
+router.use(protect);
 
-router.get("/", listDivisions);
-router.post("/", requireELT, createDivision);
-router.patch("/:id", updateDivision);
-router.delete("/:id", requireELT, deleteDivision);
+router.get("/", requireAnySection(["master_run_cuts", "deployment", "network_success"]), listDivisions);
+router.post("/", requireAnySection(["master_run_cuts", "deployment"]), requireELT, createDivision);
+router.patch("/:id", requireAnySection(["master_run_cuts", "deployment"]), updateDivision);
+router.delete("/:id", requireAnySection(["master_run_cuts", "deployment"]), requireELT, deleteDivision);
 
 export default router;

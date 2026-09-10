@@ -1,6 +1,6 @@
 # BigStar Operations Server
 
-The Express and MongoDB backend for Big Star Transit's operations platform. It provides cookie-based authentication, role/section/division authorization, standing and dated run-cut management, issue synchronization, operational reporting and exports, audit logging, and scheduled assignment/weekly-summary jobs.
+The Express and MongoDB backend for Big Star Transit's operations platform. It provides cookie-based authentication, role/section/division authorization, standing and dated run-cut management, issue synchronization, Vision/Ecolane Network Success ingestion, operational reporting and exports, audit logging, and scheduled assignment/weekly-summary jobs.
 
 For the current operational specification, see [BigStar-Operations-Guide.md](../BigStar-Operations-Guide.md).
 

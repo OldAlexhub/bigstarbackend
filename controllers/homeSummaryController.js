@@ -21,7 +21,10 @@ const emptyTotals = () => ({
 
 export const getHomeSummary = async (req, res) => {
   const hasOperationsAccess =
-    req.user.role === "ELT" || req.user.sections.includes("master_run_cuts") || req.user.sections.includes("deployment");
+    req.user.role === "ELT" ||
+    req.user.sections.includes("master_run_cuts") ||
+    req.user.sections.includes("deployment") ||
+    req.user.sections.includes("network_success");
 
   if (!hasOperationsAccess) {
     return res.json({ divisions: [], totals: emptyTotals(), hasOperationsAccess });
