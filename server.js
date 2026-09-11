@@ -22,8 +22,12 @@ import eltReportingRoutes from "./routes/eltReportingRoutes.js"
 import leaderboardRoutes from "./routes/leaderboardRoutes.js"
 import usersRoutes from "./routes/usersRoutes.js"
 import networkSuccessRoutes from "./routes/networkSuccessRoutes.js"
+import customerServiceRoutes from "./routes/customerServiceRoutes.js"
+import safetyRoutes from "./routes/safetyRoutes.js"
+import operationsReportingRoutes from "./routes/operationsReportingRoutes.js"
 import { scheduleWeeklyFinalization } from "./jobs/finalizeWeeks.js"
 import { scheduleAssignmentRollover } from "./jobs/rolloverAssignments.js"
+import { scheduleOperationsReconciliation } from "./jobs/reconcileOperationsReporting.js"
 import {fileURLToPath} from "url"
 import path from "path"
 
@@ -66,6 +70,9 @@ app.use("/api/elt-reporting", eltReportingRoutes)
 app.use("/api/leaderboard", leaderboardRoutes)
 app.use("/api/users", usersRoutes)
 app.use("/api/network-success", networkSuccessRoutes)
+app.use("/api/customer-service", customerServiceRoutes)
+app.use("/api/safety", safetyRoutes)
+app.use("/api/operations-reporting", operationsReportingRoutes)
 
 const publicDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), "public")
 app.use(express.static(publicDirectory))
@@ -79,6 +86,7 @@ app.get(/^(?!\/api).*/, (_req, res) => {
 connectTodb().then(() => {
     scheduleWeeklyFinalization()
     scheduleAssignmentRollover()
+    scheduleOperationsReconciliation()
 })
 
 

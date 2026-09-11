@@ -15,6 +15,7 @@ import {
   syncStatusWithDisposition,
 } from "../utils/dispositions.js";
 import { logDeploymentActivity } from "../utils/deploymentActivityLog.js";
+import { queueOperationsRefresh } from "../utils/operationsReporting.js";
 import {
   resolveOperator,
   resolveVehicle,
@@ -171,6 +172,7 @@ export const setRunCutDayDeployed = async (req, res) => {
   });
 
   const populated = await populateRunCutDay(RunCutDay.findById(runCutDay._id));
+  queueOperationsRefresh(runCutDay.division, isoDate(runCutDay.date).slice(0, 7));
   res.json({ runCutDay: populated });
 };
 
@@ -311,6 +313,7 @@ export const updateRunCutDayException = async (req, res) => {
   await syncAutoIssuesBulk(affected, req.user._id);
 
   const populated = await populateRunCutDay(RunCutDay.findById(runCutDay._id));
+  for (const day of affected) queueOperationsRefresh(day.division, isoDate(day.date).slice(0, 7));
   res.json({ runCutDay: populated });
 };
 
@@ -381,6 +384,7 @@ export const createExtraRunCutDay = async (req, res) => {
   });
 
   const populated = await populateRunCutDay(RunCutDay.findById(runCutDay._id));
+  queueOperationsRefresh(division, isoDate(dayDate).slice(0, 7));
   res.status(201).json({ runCutDay: populated });
 };
 
@@ -401,6 +405,9 @@ export const deleteExtraRunCutDay = async (req, res) => {
     summary: `Removed extra run for ${runCutDay.route.code} on ${isoDate(runCutDay.date)}`,
   });
 
+  const division = runCutDay.division;
+  const month = isoDate(runCutDay.date).slice(0, 7);
   await runCutDay.deleteOne();
+  queueOperationsRefresh(division, month);
   res.json({ message: "Extra duty removed" });
 };

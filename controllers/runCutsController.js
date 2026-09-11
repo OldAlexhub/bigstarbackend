@@ -11,6 +11,14 @@ import {
   findOperatorConflict,
   findVehicleConflictIds,
 } from "../utils/resolveAssignment.js";
+import { addMonths, monthInTimezone } from "../utils/operationsKpis.js";
+import { queueOperationsRefresh } from "../utils/operationsReporting.js";
+
+const queueProjectedMonths = (division, timezone) => {
+  const month = monthInTimezone(timezone);
+  queueOperationsRefresh(division, month);
+  queueOperationsRefresh(division, addMonths(month, 1));
+};
 
 const populateRunCut = (query) =>
   query
@@ -96,6 +104,7 @@ export const createRunCut = async (req, res) => {
   });
 
   await projectAssignment(runCut, req.user._id);
+  queueProjectedMonths(division, divisionDoc.timezone);
   const populated = await populateRunCut(RunCut.findById(runCut._id));
   res.status(201).json({ runCut: populated });
 };
@@ -167,6 +176,7 @@ export const updateRunCut = async (req, res) => {
 
   await runCut.save();
   await projectAssignment(runCut, req.user._id);
+  queueProjectedMonths(runCut.division, divisionDoc.timezone);
 
   if (changes.length) {
     await ChangeLog.insertMany(
@@ -203,8 +213,10 @@ export const deleteRunCut = async (req, res) => {
   if (!canAccessDivision(req.user, runCut.division)) {
     return res.status(403).json({ message: "No access to this division" });
   }
+  const divisionDoc = await Division.findById(runCut.division);
   runCut.daysOfWeek = [];
   await projectAssignment(runCut, req.user._id);
+  queueProjectedMonths(runCut.division, divisionDoc?.timezone);
   await runCut.deleteOne();
   res.json({ message: "Run cut deleted" });
 };

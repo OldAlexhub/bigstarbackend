@@ -12,7 +12,7 @@ const router = Router();
 
 router.use(protect);
 
-router.get("/", requireAnySection(["master_run_cuts", "deployment", "network_success"]), listDivisions);
+router.get("/", requireAnySection(["master_run_cuts", "deployment", "network_success", "customer_service", "safety", "operations_reporting"]), listDivisions);
 router.post("/", requireAnySection(["master_run_cuts", "deployment"]), requireELT, createDivision);
 router.patch("/:id", requireAnySection(["master_run_cuts", "deployment"]), updateDivision);
 router.delete("/:id", requireAnySection(["master_run_cuts", "deployment"]), requireELT, deleteDivision);

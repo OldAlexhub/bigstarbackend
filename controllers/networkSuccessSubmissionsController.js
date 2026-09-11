@@ -5,6 +5,7 @@ import RunCutDay from "../models/RunCutDay.js";
 import DailyIssueLog from "../models/DailyIssueLog.js";
 import Operator from "../models/Operator.js";
 import Provider from "../models/Provider.js";
+import { queueOperationsRefresh } from "../utils/operationsReporting.js";
 import RunCut from "../models/RunCut.js";
 import NetworkSubmission from "../models/NetworkSubmission.js";
 import NetworkKpiEntry from "../models/NetworkKpiEntry.js";
@@ -465,6 +466,9 @@ export const confirmSubmission = async (req, res) => {
   ).length;
   submission.changeAudit = changeAudit;
   await submission.save();
+  for (const month of [...new Set(acceptedDates.map((date) => date.slice(0, 7)))]) {
+    queueOperationsRefresh(submission.division, month);
+  }
   res.json({ submission: submissionJson(submission), counts: submission.counts });
 };
 
@@ -513,6 +517,9 @@ export const removeSubmission = async (req, res) => {
   submission.parsedRows = [];
   submission.previewRows = [];
   await submission.save();
+  for (const month of [...new Set(activeEntries.map((entry) => entry.date.slice(0, 7)))]) {
+    queueOperationsRefresh(submission.division, month);
+  }
 
   res.json({
     message: activeEntries.length
