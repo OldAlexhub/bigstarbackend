@@ -1,10 +1,10 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import connectTodb from "../db/connectTodb.js";
-import Division from "../models/Division.js";
-import { DEFAULT_TIMEZONE } from "../utils/timezone.js";
+import connectTodb from "../../db/connectTodb.js";
+import Division from "../../models/Division.js";
+import { DEFAULT_TIMEZONE } from "../../utils/timezone.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // Mongoose already resolves a missing `timezone` field to DEFAULT_TIMEZONE
 // on read (schema default), so this is a one-off to make that explicit in

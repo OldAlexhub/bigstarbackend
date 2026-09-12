@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import mongoose from "mongoose";
 import NetworkKpiEntry from "../models/NetworkKpiEntry.js";
 import NetworkSubmission from "../models/NetworkSubmission.js";
 import Operator from "../models/Operator.js";
 import Provider from "../models/Provider.js";
 import RunCut from "../models/RunCut.js";
 import { removeSubmission, reopenSubmission, updatePerformanceAssignment } from "./networkSuccessSubmissionsController.js";
+
+const transaction = mongoose.connection.transaction;
+test.beforeEach(() => {
+  mongoose.connection.transaction = async (work) => work();
+});
+test.afterEach(() => {
+  mongoose.connection.transaction = transaction;
+});
 
 const response = () => ({
   statusCode: 200,

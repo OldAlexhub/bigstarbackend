@@ -1,14 +1,13 @@
 import mongoose from "mongoose";
 
-const connectToDb = async () => {
-  try {
-    const conn = await mongoose.connect(process.env.MONGO_URL);
+mongoose.set("transactionAsyncLocalStorage", true);
 
-    console.log(`MongoDB Connected: ${conn.connection.host}`);
-  } catch (error) {
-    console.error(`MongoDB connection error: ${error.message}`);
-    process.exit(1);
-  }
+const connectToDb = async (mongoUrl = process.env.MONGO_URL) => {
+  if (!mongoUrl?.trim()) throw new Error("MONGO_URL is required.");
+
+  const connection = await mongoose.connect(mongoUrl);
+  console.log(`MongoDB connected: ${connection.connection.host}`);
+  return connection.connection;
 };
 
 export default connectToDb;

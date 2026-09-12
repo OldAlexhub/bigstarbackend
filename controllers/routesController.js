@@ -4,6 +4,7 @@ import RunCut from "../models/RunCut.js";
 import RunCutDay from "../models/RunCutDay.js";
 import DailyIssueLog from "../models/DailyIssueLog.js";
 import { canAccessDivision, divisionFilter } from "../middleware/access.js";
+import { runInTransaction } from "../utils/transaction.js";
 
 export const listRoutes = async (req, res) => {
   const typeFilter = req.query.includeStandby === "1" ? {} : { type: { $ne: "standby" } };
@@ -83,19 +84,21 @@ export const deleteRoute = async (req, res) => {
   // this route is left alone, same as everywhere else in this model. The
   // Route itself is kept inactive so historical records retain their code
   // and the action can be recovered by adding the same route again.
-  const today = new Date();
-  today.setUTCHours(0, 0, 0, 0);
-  const futureRunCutDays = await RunCutDay.find({ route: route._id, date: { $gte: today } });
-  const futureIds = futureRunCutDays.map((rcd) => rcd._id);
-  await DailyIssueLog.deleteMany({ runCutDay: { $in: futureIds }, autoSyncTag: { $ne: null } });
-  await RunCutDay.updateMany(
-    { dispositionSource: "standby", dispositionStandbyDay: { $in: futureIds } },
-    { $set: { disposition: null, dispositionSource: null, dispositionStandbyDay: null } }
-  );
-  await RunCutDay.deleteMany({ _id: { $in: futureIds } });
-  await RunCut.deleteOne({ route: route._id });
+  await runInTransaction(async () => {
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const futureRunCutDays = await RunCutDay.find({ route: route._id, date: { $gte: today } });
+    const futureIds = futureRunCutDays.map((rcd) => rcd._id);
+    await DailyIssueLog.deleteMany({ runCutDay: { $in: futureIds }, autoSyncTag: { $ne: null } });
+    await RunCutDay.updateMany(
+      { dispositionSource: "standby", dispositionStandbyDay: { $in: futureIds } },
+      { $set: { disposition: null, dispositionSource: null, dispositionStandbyDay: null } }
+    );
+    await RunCutDay.deleteMany({ _id: { $in: futureIds } });
+    await RunCut.deleteOne({ route: route._id });
 
-  route.active = false;
-  await route.save();
+    route.active = false;
+    await route.save();
+  });
   res.json({ message: "Route removed from Master Run Cuts" });
 };

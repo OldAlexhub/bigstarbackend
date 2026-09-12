@@ -10,7 +10,7 @@ const signToken = (user) =>
 // (the deployed client is a different origin than this API) — but "none"
 // is only valid on a secure (HTTPS) cookie, hence both being tied to
 // NODE_ENV === "production" together. Locally, client and server are
-// same-origin via CRA's dev proxy, so "lax" over plain HTTP still works.
+// same-origin via Vite's dev proxy, so "lax" over plain HTTP still works.
 const cookieOptions = {
   httpOnly: true,
   sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",

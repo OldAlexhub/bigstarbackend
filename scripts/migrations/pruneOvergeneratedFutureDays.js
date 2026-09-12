@@ -1,14 +1,14 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import connectTodb from "../db/connectTodb.js";
-import RunCutDay from "../models/RunCutDay.js";
-import DailyIssueLog from "../models/DailyIssueLog.js";
-import Division from "../models/Division.js";
-import { todayInTimezone } from "../utils/timezone.js";
-import { addDays } from "../utils/weeklyMetrics.js";
-import { PROJECTION_HORIZON_DAYS } from "../utils/projectAssignment.js";
+import connectTodb from "../../db/connectTodb.js";
+import RunCutDay from "../../models/RunCutDay.js";
+import DailyIssueLog from "../../models/DailyIssueLog.js";
+import Division from "../../models/Division.js";
+import { todayInTimezone } from "../../utils/timezone.js";
+import { addDays } from "../../utils/weeklyMetrics.js";
+import { PROJECTION_HORIZON_DAYS } from "../../utils/projectAssignment.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // One-time cleanup for the PROJECTION_HORIZON_DAYS reduction (14 -> 6):
 // projectAssignment's own cleanup only prunes dates it's currently asked to

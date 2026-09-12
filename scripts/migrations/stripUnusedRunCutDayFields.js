@@ -1,9 +1,9 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import connectTodb from "../db/connectTodb.js";
-import RunCutDay from "../models/RunCutDay.js";
+import connectTodb from "../../db/connectTodb.js";
+import RunCutDay from "../../models/RunCutDay.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // `notes` and `firstPickupOnTime` were removed from the schema (confirmed
 // unused anywhere in server/ or client/src) — Mongoose stops reading/writing

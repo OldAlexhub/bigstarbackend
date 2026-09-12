@@ -1,10 +1,10 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import connectTodb from "../db/connectTodb.js";
-import DailyIssueLog from "../models/DailyIssueLog.js";
-import { migrateIssueIdentity } from "../utils/dedupeAutoIssues.js";
+import connectTodb from "../../db/connectTodb.js";
+import DailyIssueLog from "../../models/DailyIssueLog.js";
+import { migrateIssueIdentity } from "../../utils/dedupeAutoIssues.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // The migration owns the index transition. Disable Mongoose's automatic
 // index build so it cannot race the cleanup of existing duplicate rows.

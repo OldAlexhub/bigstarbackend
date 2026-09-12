@@ -22,6 +22,8 @@ import {
 import { normalizePersonName } from "../utils/networkSuccess/reportParsing.js";
 import { planReplacement } from "../utils/networkSuccess/replacementPlan.js";
 import { buildPerformanceAnalysis } from "../utils/networkSuccess/performanceAnalysis.js";
+import { runInTransaction } from "../utils/transaction.js";
+import { httpError, respondToHttpError } from "../utils/httpError.js";
 
 const issueRank = { blocker: 0, warning: 1, clean: 2 };
 const fileMetadata = (file, kind) => ({
@@ -329,7 +331,7 @@ export const previewSubmission = async (req, res) => {
 };
 
 export const confirmSubmission = async (req, res) => {
-  const submission = await NetworkSubmission.findById(req.params.id);
+  let submission = await NetworkSubmission.findById(req.params.id);
   const accessError = ensureSubmissionAccess(req, submission);
   if (accessError) return res.status(accessError.status).json({ message: accessError.message });
   if (submission.status === "confirmed") return res.status(409).json({ message: "This submission is already confirmed." });
@@ -385,17 +387,29 @@ export const confirmSubmission = async (req, res) => {
   const context = await buildEnrichmentContext(submission.division, aggregated);
   const enriched = aggregated.map((group) => enrichGroup(group, context));
   const acceptedDates = [...new Set(enriched.map((entry) => entry.date))];
-  const previous = await NetworkKpiEntry.find({
-    division: submission.division,
-    source: submission.source,
-    date: { $in: acceptedDates },
-  }).lean();
-  const previousByKey = new Map(previous.map((entry) => [`${entry.date}|${id(entry.route)}`, entry]));
-  const nextKeys = new Set(enriched.map((entry) => `${entry.date}|${entry.routeId}`));
-  const replacement = planReplacement(previousByKey.keys(), nextKeys);
-  const created = replacement.created.length;
-  const updated = replacement.updated.length;
-  const changeAudit = [];
+  let created;
+  let updated;
+  let removedEntries;
+
+  try {
+    await runInTransaction(async () => {
+    const currentSubmission = await NetworkSubmission.findOne({
+      _id: submission._id,
+      status: { $ne: "confirmed" },
+    });
+    if (!currentSubmission) throw httpError(409, "This submission is already confirmed.");
+    submission = currentSubmission;
+    const previous = await NetworkKpiEntry.find({
+      division: submission.division,
+      source: submission.source,
+      date: { $in: acceptedDates },
+    }).lean();
+    const previousByKey = new Map(previous.map((entry) => [`${entry.date}|${id(entry.route)}`, entry]));
+    const nextKeys = new Set(enriched.map((entry) => `${entry.date}|${entry.routeId}`));
+    const replacement = planReplacement(previousByKey.keys(), nextKeys);
+    created = replacement.created.length;
+    updated = replacement.updated.length;
+    const changeAudit = [];
 
   for (const entry of enriched) {
     const key = `${entry.date}|${entry.routeId}`;
@@ -426,46 +440,50 @@ export const confirmSubmission = async (req, res) => {
     changeAudit.push({ action: before ? "updated" : "created", key, before, after });
   }
 
-  const removedKeys = new Set(replacement.removed);
-  const removedEntries = previous.filter((entry) => removedKeys.has(`${entry.date}|${id(entry.route)}`));
-  if (removedEntries.length) {
-    await NetworkKpiEntry.deleteMany({ _id: { $in: removedEntries.map((entry) => entry._id) } });
-    for (const entry of removedEntries) {
-      changeAudit.push({ action: "removed", key: `${entry.date}|${id(entry.route)}`, before: entry, after: null });
+    const removedKeys = new Set(replacement.removed);
+    removedEntries = previous.filter((entry) => removedKeys.has(`${entry.date}|${id(entry.route)}`));
+    if (removedEntries.length) {
+      await NetworkKpiEntry.deleteMany({ _id: { $in: removedEntries.map((entry) => entry._id) } });
+      for (const entry of removedEntries) {
+        changeAudit.push({ action: "removed", key: `${entry.date}|${id(entry.route)}`, before: entry, after: null });
+      }
     }
-  }
-  for (const { row, route } of aliases) {
-    await NetworkRouteAlias.findOneAndUpdate(
-      {
-        division: submission.division,
-        source: submission.source,
-        normalizedSourceRoute: normalizeRouteCode(row.sourceRoute),
-      },
-      {
-        division: submission.division,
-        source: submission.source,
-        normalizedSourceRoute: normalizeRouteCode(row.sourceRoute),
-        sourceRoute: row.sourceRoute,
-        route: route._id,
-        confirmedBy: req.user._id,
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-  }
+    for (const { row, route } of aliases) {
+      await NetworkRouteAlias.findOneAndUpdate(
+        {
+          division: submission.division,
+          source: submission.source,
+          normalizedSourceRoute: normalizeRouteCode(row.sourceRoute),
+        },
+        {
+          division: submission.division,
+          source: submission.source,
+          normalizedSourceRoute: normalizeRouteCode(row.sourceRoute),
+          sourceRoute: row.sourceRoute,
+          route: route._id,
+          confirmedBy: req.user._id,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    }
 
-  submission.status = "confirmed";
-  submission.confirmedBy = req.user._id;
-  submission.confirmedAt = new Date();
-  submission.counts.created = created;
-  submission.counts.updated = updated;
-  submission.counts.removed = removedEntries.length;
-  submission.counts.excluded = excluded;
-  submission.counts.zeroTripRows = accepted.filter((row) => row.zeroTrips).length;
-  submission.counts.incompleteEnrichment = enriched.filter(
-    (entry) => entry.deployment.warning || entry.deployment.assignmentWarning
-  ).length;
-  submission.changeAudit = changeAudit;
-  await submission.save();
+    submission.status = "confirmed";
+    submission.confirmedBy = req.user._id;
+    submission.confirmedAt = new Date();
+    submission.counts.created = created;
+    submission.counts.updated = updated;
+    submission.counts.removed = removedEntries.length;
+    submission.counts.excluded = excluded;
+    submission.counts.zeroTripRows = accepted.filter((row) => row.zeroTrips).length;
+    submission.counts.incompleteEnrichment = enriched.filter(
+      (entry) => entry.deployment.warning || entry.deployment.assignmentWarning
+    ).length;
+    submission.changeAudit = changeAudit;
+    await submission.save();
+    });
+  } catch (error) {
+    return respondToHttpError(error, res);
+  }
   for (const month of [...new Set(acceptedDates.map((date) => date.slice(0, 7)))]) {
     queueOperationsRefresh(submission.division, month);
   }
@@ -493,30 +511,42 @@ export const listSubmissions = async (req, res) => {
 };
 
 export const removeSubmission = async (req, res) => {
-  const submission = await NetworkSubmission.findById(req.params.id);
+  let submission = await NetworkSubmission.findById(req.params.id);
   const accessError = ensureSubmissionAccess(req, submission);
   if (accessError) return res.status(accessError.status).json({ message: accessError.message });
   if (submission.status === "removed") return res.status(409).json({ message: "This submission has already been removed." });
 
-  const activeEntries = submission.status === "confirmed"
-    ? await NetworkKpiEntry.find({ submission: submission._id }).lean()
-    : [];
-  if (activeEntries.length) await NetworkKpiEntry.deleteMany({ submission: submission._id });
+  let activeEntries;
+  try {
+    await runInTransaction(async () => {
+    const currentSubmission = await NetworkSubmission.findById(submission._id);
+    if (!currentSubmission || currentSubmission.status === "removed") {
+      throw httpError(409, "This submission has already been removed.");
+    }
+    submission = currentSubmission;
+    activeEntries = submission.status === "confirmed"
+      ? await NetworkKpiEntry.find({ submission: submission._id }).lean()
+      : [];
+    if (activeEntries.length) await NetworkKpiEntry.deleteMany({ submission: submission._id });
 
-  const removedAt = new Date();
-  submission.changeAudit.push({
-    action: "submission_removed",
-    changedAt: removedAt,
-    changedBy: req.user._id,
-    previousStatus: submission.status,
-    removedEntries: activeEntries,
-  });
-  submission.status = "removed";
-  submission.removedAt = removedAt;
-  submission.removedBy = req.user._id;
-  submission.parsedRows = [];
-  submission.previewRows = [];
-  await submission.save();
+    const removedAt = new Date();
+    submission.changeAudit.push({
+      action: "submission_removed",
+      changedAt: removedAt,
+      changedBy: req.user._id,
+      previousStatus: submission.status,
+      removedEntries: activeEntries,
+    });
+    submission.status = "removed";
+    submission.removedAt = removedAt;
+    submission.removedBy = req.user._id;
+    submission.parsedRows = [];
+    submission.previewRows = [];
+    await submission.save();
+    });
+  } catch (error) {
+    return respondToHttpError(error, res);
+  }
   for (const month of [...new Set(activeEntries.map((entry) => entry.date.slice(0, 7)))]) {
     queueOperationsRefresh(submission.division, month);
   }
@@ -530,7 +560,7 @@ export const removeSubmission = async (req, res) => {
 };
 
 export const reopenSubmission = async (req, res) => {
-  const original = await NetworkSubmission.findById(req.params.id);
+  let original = await NetworkSubmission.findById(req.params.id);
   const accessError = ensureSubmissionAccess(req, original);
   if (accessError) return res.status(accessError.status).json({ message: accessError.message });
   if (original.status === "removed") return res.status(409).json({ message: "Removed submissions cannot be reopened. Upload the workbook again instead." });
@@ -540,38 +570,53 @@ export const reopenSubmission = async (req, res) => {
     return res.json({ submission: submissionJson(original), reopened: false });
   }
 
-  let revision = await NetworkSubmission.findOne({
-    reopenedFrom: original._id,
-    status: { $in: ["pending", "matched"] },
-  });
+  let revision;
   let created = false;
-  if (!revision) {
-    revision = await NetworkSubmission.create({
-      source: original.source,
-      status: "pending",
-      files: original.files.map((file) => file.toObject?.() || file),
-      division: original.division,
-      divisionCandidates: original.divisionCandidates,
-      parsedRows: original.parsedRows,
-      previewRows: [],
-      blockedDates: original.blockedDates,
-      reportDates: original.reportDates,
-      warnings: original.warnings,
-      createdBy: req.user._id,
+  try {
+    await runInTransaction(async () => {
+    const currentOriginal = await NetworkSubmission.findById(original._id);
+    if (!currentOriginal || currentOriginal.status === "removed") {
+      throw httpError(409, "Removed submissions cannot be reopened. Upload the workbook again instead.");
+    }
+    if (currentOriginal.status !== "confirmed") {
+      throw httpError(409, "This submission is no longer confirmed.");
+    }
+    original = currentOriginal;
+    revision = await NetworkSubmission.findOne({
       reopenedFrom: original._id,
-      counts: {
-        sourceRows: original.counts?.sourceRows || original.parsedRows.length,
-        zeroTripRows: original.counts?.zeroTripRows || 0,
-      },
+      status: { $in: ["pending", "matched"] },
     });
-    original.changeAudit.push({
-      action: "reopened_as_revision",
-      changedAt: new Date(),
-      changedBy: req.user._id,
-      revision: revision._id,
+    if (!revision) {
+      revision = await NetworkSubmission.create({
+        source: original.source,
+        status: "pending",
+        files: original.files.map((file) => file.toObject?.() || file),
+        division: original.division,
+        divisionCandidates: original.divisionCandidates,
+        parsedRows: original.parsedRows,
+        previewRows: [],
+        blockedDates: original.blockedDates,
+        reportDates: original.reportDates,
+        warnings: original.warnings,
+        createdBy: req.user._id,
+        reopenedFrom: original._id,
+        counts: {
+          sourceRows: original.counts?.sourceRows || original.parsedRows.length,
+          zeroTripRows: original.counts?.zeroTripRows || 0,
+        },
+      });
+      original.changeAudit.push({
+        action: "reopened_as_revision",
+        changedAt: new Date(),
+        changedBy: req.user._id,
+        revision: revision._id,
+      });
+      await original.save();
+      created = true;
+    }
     });
-    await original.save();
-    created = true;
+  } catch (error) {
+    return respondToHttpError(error, res);
   }
 
   return res.status(created ? 201 : 200).json({ submission: submissionJson(revision), reopened: true });
@@ -722,31 +767,37 @@ export const updatePerformanceAssignment = async (req, res) => {
     if (!operator && requestedProviderId) {
       return res.status(400).json({ message: "Choose an operator before assigning a provider." });
     }
-    const runCut = await RunCut.findOne({ division: entry.division, route: entry.route });
-    if (!runCut) {
-      return res.status(400).json({ message: "This route is not available in Master Run Cuts." });
+    try {
+      await runInTransaction(async () => {
+        const currentEntry = await NetworkKpiEntry.findById(entry._id);
+        if (!currentEntry) throw httpError(404, "Network performance record not found");
+        const runCut = await RunCut.findOne({ division: currentEntry.division, route: currentEntry.route });
+        if (!runCut) throw httpError(400, "This route is not available in Master Run Cuts.");
+        const beforeMaster = {
+          operator: id(runCut.operator),
+          provider: id(operator?.provider),
+        };
+        runCut.operator = operator?._id || null;
+        runCut.updatedBy = req.user._id;
+        if (operator && Object.prototype.hasOwnProperty.call(req.body, "providerId")) {
+          operator.provider = resolvedProvider?._id || null;
+          await operator.save();
+        }
+        await runCut.save();
+        currentEntry.assignmentOverride = null;
+        currentEntry.assignmentAudit.push({
+          changedAt: after.updatedAt,
+          changedBy: req.user._id,
+          scope: "master_run_cuts",
+          before: beforeMaster,
+          after,
+        });
+        currentEntry.updatedBy = req.user._id;
+        await currentEntry.save();
+      });
+    } catch (error) {
+      return respondToHttpError(error, res);
     }
-    const beforeMaster = {
-      operator: id(runCut.operator),
-      provider: id(operator?.provider),
-    };
-    runCut.operator = operator?._id || null;
-    runCut.updatedBy = req.user._id;
-    if (operator && Object.prototype.hasOwnProperty.call(req.body, "providerId")) {
-      operator.provider = resolvedProvider?._id || null;
-      await operator.save();
-    }
-    await runCut.save();
-    entry.assignmentOverride = null;
-    entry.assignmentAudit.push({
-      changedAt: after.updatedAt,
-      changedBy: req.user._id,
-      scope: "master_run_cuts",
-      before: beforeMaster,
-      after,
-    });
-    entry.updatedBy = req.user._id;
-    await entry.save();
     return res.json({
       message: "Master Run Cut assignment saved. This operator/provider relationship will be reused automatically.",
       reused: true,

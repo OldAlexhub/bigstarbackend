@@ -1,21 +1,14 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import path from "path";
-import { fileURLToPath } from "url";
 import XLSX from "xlsx";
-import connectTodb from "../db/connectTodb.js";
-import Division from "../models/Division.js";
-import Route from "../models/Route.js";
-import RunCut from "../models/RunCut.js";
-import { projectAssignment } from "../utils/projectAssignment.js";
+import connectTodb from "../../db/connectTodb.js";
+import Division from "../../models/Division.js";
+import Route from "../../models/Route.js";
+import RunCut from "../../models/RunCut.js";
+import { projectAssignment } from "../../utils/projectAssignment.js";
+import { requiredFile } from "../lib/requiredFile.js";
 
-dotenv.config();
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SOURCE_PATH = path.join(
-  __dirname,
-  "../../Artifacts-refrences/AUG_NETWORK SUCCESS UTILIZATION REPORT Copy (1).xlsm"
-);
+dotenv.config({ quiet: true });
 
 const STATUS_MAP = { Active: "active", Unassigned: "unassigned" };
 
@@ -28,9 +21,13 @@ const STATUS_MAP = { Active: "active", Unassigned: "unassigned" };
 // there (the most common non-OFF status across each route's actual
 // scheduled days) and re-project it into RunCutDay.
 const run = async () => {
+  const sourcePath = requiredFile({
+    envName: "SOURCE_WORKBOOK_PATH",
+    description: "source workbook",
+  });
   await connectTodb();
 
-  const workbook = XLSX.readFile(SOURCE_PATH);
+  const workbook = XLSX.readFile(sourcePath);
   const sheet = workbook.Sheets["DDS xx.xx - xx.xx"];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, range: 3 });
 

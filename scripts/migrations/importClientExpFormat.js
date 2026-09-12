@@ -1,20 +1,18 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import XLSX from "xlsx";
-import connectTodb from "./db/connectTodb.js";
-import Division from "./models/Division.js";
-import Route from "./models/Route.js";
-import Operator from "./models/Operator.js";
-import Vehicle from "./models/Vehicle.js";
-import RunCut from "./models/RunCut.js";
-import RunCutDay from "./models/RunCutDay.js";
-import { DAYS_OF_WEEK } from "./utils/hours.js";
-import { startOfWeek, addDays } from "./utils/weeklyMetrics.js";
+import connectTodb from "../../db/connectTodb.js";
+import Division from "../../models/Division.js";
+import Route from "../../models/Route.js";
+import Operator from "../../models/Operator.js";
+import Vehicle from "../../models/Vehicle.js";
+import RunCut from "../../models/RunCut.js";
+import RunCutDay from "../../models/RunCutDay.js";
+import { DAYS_OF_WEEK } from "../../utils/hours.js";
+import { startOfWeek, addDays } from "../../utils/weeklyMetrics.js";
+import { requiredFile } from "../lib/requiredFile.js";
 
-dotenv.config();
-
-const WORKBOOK_PATH =
-  "c:\\Users\\moham\\Desktop\\bigstar\\BigStar Mega Project - Automation\\Artifacts-refrences\\AUG_NETWORK SUCCESS UTILIZATION REPORT Copy (1).xlsm";
+dotenv.config({ quiet: true });
 
 // Friendly names for the divisions found in ClientExpFormat, taken from the
 // Tracker tab's block headers (e.g. "DIVISION 3 - ADA").
@@ -61,8 +59,12 @@ const round2 = (n) => Math.round(n * 100) / 100;
 
 const run = async () => {
   const dryRun = process.argv.includes("--dry-run");
+  const workbookPath = requiredFile({
+    envName: "IMPORT_WORKBOOK_PATH",
+    description: "ClientExpFormat workbook",
+  });
 
-  const workbook = XLSX.readFile(WORKBOOK_PATH, { raw: true });
+  const workbook = XLSX.readFile(workbookPath, { raw: true });
   const sheet = workbook.Sheets["ClientExpFormat"];
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: null });
 

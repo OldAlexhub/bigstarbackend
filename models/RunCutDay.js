@@ -130,6 +130,14 @@ const runCutDaySchema = new mongoose.Schema(
 
 runCutDaySchema.index({ division: 1, route: 1, date: 1 }, { unique: true });
 runCutDaySchema.index({ division: 1, date: 1 });
+runCutDaySchema.index(
+  { division: 1, date: 1, coveringRoute: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { deployed: true, coveringRoute: { $type: "objectId" } },
+    name: "one_deployed_standby_per_covered_route",
+  }
+);
 
 const RunCutDay = mongoose.model("RunCutDay", runCutDaySchema);
 

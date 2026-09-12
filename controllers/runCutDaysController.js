@@ -16,6 +16,8 @@ import {
 } from "../utils/dispositions.js";
 import { logDeploymentActivity } from "../utils/deploymentActivityLog.js";
 import { queueOperationsRefresh } from "../utils/operationsReporting.js";
+import { runInTransaction } from "../utils/transaction.js";
+import { httpError, respondToHttpError } from "../utils/httpError.js";
 import {
   resolveOperator,
   resolveVehicle,
@@ -65,114 +67,132 @@ export const listRunCutDays = async (req, res) => {
 // route it's covering isn't useful, so coveringRoute is required whenever
 // deployed is being set to true, and is always cleared when set to false.
 export const setRunCutDayDeployed = async (req, res) => {
-  const runCutDay = await RunCutDay.findById(req.params.id).populate("route", "code type");
-  if (!runCutDay) return res.status(404).json({ message: "Run cut day not found" });
-  if (!canAccessDivision(req.user, runCutDay.division)) {
-    return res.status(403).json({ message: "No access to this division" });
-  }
-  if (runCutDay.route?.type !== "standby") {
-    return res.status(400).json({ message: "Deployed can only be set on standby routes" });
-  }
+  let runCutDayId;
+  let division;
+  let date;
+  let activity;
 
-  const deployed = Boolean(req.body.deployed);
-  const previousCoveringRoute = runCutDay.coveringRoute;
-  let coveringRouteCode = null;
-  let coveredRunCutDay = null;
-  if (deployed) {
-    const { coveringRoute } = req.body;
-    if (!coveringRoute) {
-      return res.status(400).json({ message: "Select which route this standby is covering." });
-    }
-    const routeDoc = await Route.findOne({ _id: coveringRoute, division: runCutDay.division });
-    if (!routeDoc) return res.status(400).json({ message: "That route isn't in this division." });
-    if (routeDoc.type === "standby") {
-      return res.status(400).json({ message: "A standby can only cover a scheduled route." });
-    }
+  try {
+    await runInTransaction(async () => {
+      const runCutDay = await RunCutDay.findById(req.params.id).populate("route", "code type");
+      if (!runCutDay) throw httpError(404, "Run cut day not found");
+      if (!canAccessDivision(req.user, runCutDay.division)) {
+        throw httpError(403, "No access to this division");
+      }
+      if (runCutDay.route?.type !== "standby") {
+        throw httpError(400, "Deployed can only be set on standby routes");
+      }
 
-    coveredRunCutDay = await RunCutDay.findOne({
-      division: runCutDay.division,
-      route: routeDoc._id,
-      date: runCutDay.date,
+      const deployed = Boolean(req.body.deployed);
+      const previousCoveringRoute = runCutDay.coveringRoute;
+      let coveringRouteCode = null;
+      let coveredRunCutDay = null;
+      if (deployed) {
+        const { coveringRoute } = req.body;
+        if (!coveringRoute) {
+          throw httpError(400, "Select which route this standby is covering.");
+        }
+        const routeDoc = await Route.findOne({ _id: coveringRoute, division: runCutDay.division });
+        if (!routeDoc) throw httpError(400, "That route isn't in this division.");
+        if (routeDoc.type === "standby") {
+          throw httpError(400, "A standby can only cover a scheduled route.");
+        }
+
+        coveredRunCutDay = await RunCutDay.findOne({
+          division: runCutDay.division,
+          route: routeDoc._id,
+          date: runCutDay.date,
+        });
+        if (!coveredRunCutDay) {
+          throw httpError(400, "That route is not scheduled on this date.");
+        }
+
+        const duplicateCoverage = await RunCutDay.findOne({
+          _id: { $ne: runCutDay._id },
+          division: runCutDay.division,
+          date: runCutDay.date,
+          deployed: true,
+          coveringRoute: routeDoc._id,
+        });
+        if (duplicateCoverage) {
+          throw httpError(409, "That route is already covered by another standby.");
+        }
+
+        runCutDay.coveringRoute = routeDoc._id;
+        coveringRouteCode = routeDoc.code;
+      } else {
+        runCutDay.coveringRoute = null;
+      }
+
+      runCutDay.deployed = deployed;
+      runCutDay.updatedBy = req.user._id;
+      await runCutDay.save();
+
+      const coverageChanged =
+        previousCoveringRoute &&
+        (!deployed || String(previousCoveringRoute) !== String(runCutDay.coveringRoute));
+
+      if (coverageChanged) {
+        await RunCutDay.updateOne(
+          {
+            division: runCutDay.division,
+            route: previousCoveringRoute,
+            date: runCutDay.date,
+            disposition: STANDBY_DISPOSITION,
+            dispositionSource: "standby",
+            dispositionStandbyDay: runCutDay._id,
+          },
+          {
+            $set: {
+              disposition: null,
+              dispositionSource: null,
+              dispositionStandbyDay: null,
+              updatedBy: req.user._id,
+            },
+          }
+        );
+      }
+
+      if (deployed && coveredRunCutDay) {
+        activateRouteWithStandbyCoverage(coveredRunCutDay, runCutDay._id);
+        coveredRunCutDay.overrides.status = true;
+        const divisionDoc = await Division.findById(runCutDay.division);
+        const thresholds = await getEffectiveThresholds(divisionDoc);
+        const { serviceHours, revenueHours } = computeHours({
+          startTime: coveredRunCutDay.startTime,
+          endTime: coveredRunCutDay.endTime,
+          status: coveredRunCutDay.status,
+          ...thresholds,
+        });
+        coveredRunCutDay.serviceHours = serviceHours;
+        coveredRunCutDay.revenueHours = revenueHours;
+        coveredRunCutDay.updatedBy = req.user._id;
+        await coveredRunCutDay.save();
+        await syncAutoIssuesBulk([coveredRunCutDay], req.user._id);
+      }
+
+      runCutDayId = runCutDay._id;
+      division = runCutDay.division;
+      date = runCutDay.date;
+      activity = {
+        division,
+        user: req.user,
+        action: "runcutday.deployed_set",
+        summary: deployed
+          ? `Marked standby ${runCutDay.route.code} deployed on ${isoDate(date)} (covering ${coveringRouteCode})`
+          : `Marked standby ${runCutDay.route.code} not deployed on ${isoDate(date)}`,
+      };
     });
-    if (!coveredRunCutDay) {
-      return res.status(400).json({ message: "That route is not scheduled on this date." });
-    }
-
-    const duplicateCoverage = await RunCutDay.findOne({
-      _id: { $ne: runCutDay._id },
-      division: runCutDay.division,
-      date: runCutDay.date,
-      deployed: true,
-      coveringRoute: routeDoc._id,
-    });
-    if (duplicateCoverage) {
+  } catch (error) {
+    if (error.code === 11000) {
       return res.status(409).json({ message: "That route is already covered by another standby." });
     }
-
-    runCutDay.coveringRoute = routeDoc._id;
-    coveringRouteCode = routeDoc.code;
-  } else {
-    runCutDay.coveringRoute = null;
+    return respondToHttpError(error, res);
   }
 
-  runCutDay.deployed = deployed;
-  runCutDay.updatedBy = req.user._id;
-  await runCutDay.save();
-
-  const coverageChanged =
-    previousCoveringRoute &&
-    (!deployed || String(previousCoveringRoute) !== String(runCutDay.coveringRoute));
-
-  if (coverageChanged) {
-    await RunCutDay.updateOne(
-      {
-        division: runCutDay.division,
-        route: previousCoveringRoute,
-        date: runCutDay.date,
-        disposition: STANDBY_DISPOSITION,
-        dispositionSource: "standby",
-        dispositionStandbyDay: runCutDay._id,
-      },
-      {
-        $set: {
-          disposition: null,
-          dispositionSource: null,
-          dispositionStandbyDay: null,
-          updatedBy: req.user._id,
-        },
-      }
-    );
-  }
-
-  if (deployed && coveredRunCutDay) {
-    activateRouteWithStandbyCoverage(coveredRunCutDay, runCutDay._id);
-    coveredRunCutDay.overrides.status = true;
-    const divisionDoc = await Division.findById(runCutDay.division);
-    const thresholds = await getEffectiveThresholds(divisionDoc);
-    const { serviceHours, revenueHours } = computeHours({
-      startTime: coveredRunCutDay.startTime,
-      endTime: coveredRunCutDay.endTime,
-      status: coveredRunCutDay.status,
-      ...thresholds,
-    });
-    coveredRunCutDay.serviceHours = serviceHours;
-    coveredRunCutDay.revenueHours = revenueHours;
-    coveredRunCutDay.updatedBy = req.user._id;
-    await coveredRunCutDay.save();
-    await syncAutoIssuesBulk([coveredRunCutDay], req.user._id);
-  }
-
-  logDeploymentActivity({
-    division: runCutDay.division,
-    user: req.user,
-    action: "runcutday.deployed_set",
-    summary: deployed
-      ? `Marked standby ${runCutDay.route.code} deployed on ${isoDate(runCutDay.date)} (covering ${coveringRouteCode})`
-      : `Marked standby ${runCutDay.route.code} not deployed on ${isoDate(runCutDay.date)}`,
-  });
-
-  const populated = await populateRunCutDay(RunCutDay.findById(runCutDay._id));
-  queueOperationsRefresh(runCutDay.division, isoDate(runCutDay.date).slice(0, 7));
+  logDeploymentActivity(activity);
+  const populated = await populateRunCutDay(RunCutDay.findById(runCutDayId));
+  queueOperationsRefresh(division, isoDate(date).slice(0, 7));
   res.json({ runCutDay: populated });
 };
 
@@ -259,18 +279,22 @@ export const updateRunCutDayException = async (req, res) => {
   }
 
   runCutDay.updatedBy = req.user._id;
-  await runCutDay.save();
+  let affected = [];
+  const activities = [];
+  await runInTransaction(async () => {
+    activities.length = 0;
+    await runCutDay.save();
 
-  if (changeDescriptions.length) {
-    logDeploymentActivity({
-      division: runCutDay.division,
-      user: req.user,
-      action: "runcutday.exception_updated",
-      summary: `Updated ${runCutDay.route.code} on ${isoDate(runCutDay.date)}: set ${changeDescriptions.join(", ")}`,
-    });
-  }
+    if (changeDescriptions.length) {
+      activities.push({
+        division: runCutDay.division,
+        user: req.user,
+        action: "runcutday.exception_updated",
+        summary: `Updated ${runCutDay.route.code} on ${isoDate(runCutDay.date)}: set ${changeDescriptions.join(", ")}`,
+      });
+    }
 
-  const affected = [runCutDay];
+    affected = [runCutDay];
 
   // OSR is the one disruption type with an automated side effect: it also
   // suspends the route for tomorrow — a day-specific override on tomorrow's
@@ -301,7 +325,7 @@ export const updateRunCutDayException = async (req, res) => {
       await tomorrowDay.save();
       affected.push(tomorrowDay);
 
-      logDeploymentActivity({
+      activities.push({
         division: tomorrowDay.division,
         user: req.user,
         action: "runcutday.exception_updated",
@@ -310,7 +334,10 @@ export const updateRunCutDayException = async (req, res) => {
     }
   }
 
-  await syncAutoIssuesBulk(affected, req.user._id);
+    await syncAutoIssuesBulk(affected, req.user._id);
+  });
+
+  for (const activity of activities) logDeploymentActivity(activity);
 
   const populated = await populateRunCutDay(RunCutDay.findById(runCutDay._id));
   for (const day of affected) queueOperationsRefresh(day.division, isoDate(day.date).slice(0, 7));
@@ -332,48 +359,48 @@ export const createExtraRunCutDay = async (req, res) => {
   }
 
   const dayDate = new Date(date);
-  const [route, operator, vehicle] = await Promise.all([
-    resolveRoute(division, routeCode),
-    resolveOperator(operatorName),
-    resolveVehicle(division, vehicleCode),
-  ]);
-
-  const conflict = await findOperatorConflictOnDate({ operator, date: dayDate, startTime, endTime });
-  if (conflict) return res.status(409).json({ message: conflictMessage(conflict) });
-
-  const divisionDoc = await Division.findById(division);
-  const thresholds = await getEffectiveThresholds(divisionDoc);
-  const { serviceHours, revenueHours } = computeHours({
-    startTime,
-    endTime,
-    status: "add_rte",
-    ...thresholds,
-  });
-
+  let route;
   let runCutDay;
   try {
-    runCutDay = await RunCutDay.create({
-      division,
-      route: route._id,
-      date: dayDate,
-      operator,
-      vehicle,
-      pulloutAddress,
-      startTime,
-      endTime,
-      status: "add_rte",
-      serviceHours,
-      revenueHours,
-      clientNotes: notes || "",
-      isExtra: true,
-      overrides: { status: true, clientNotes: true, disruption: false },
-      updatedBy: req.user._id,
+    await runInTransaction(async () => {
+      route = await resolveRoute(division, routeCode);
+      const operator = await resolveOperator(operatorName);
+      const vehicle = await resolveVehicle(division, vehicleCode);
+      const conflict = await findOperatorConflictOnDate({ operator, date: dayDate, startTime, endTime });
+      if (conflict) throw httpError(409, conflictMessage(conflict));
+
+      const divisionDoc = await Division.findById(division);
+      const thresholds = await getEffectiveThresholds(divisionDoc);
+      const { serviceHours, revenueHours } = computeHours({
+        startTime,
+        endTime,
+        status: "add_rte",
+        ...thresholds,
+      });
+
+      runCutDay = await RunCutDay.create({
+        division,
+        route: route._id,
+        date: dayDate,
+        operator,
+        vehicle,
+        pulloutAddress,
+        startTime,
+        endTime,
+        status: "add_rte",
+        serviceHours,
+        revenueHours,
+        clientNotes: notes || "",
+        isExtra: true,
+        overrides: { status: true, clientNotes: true, disruption: false },
+        updatedBy: req.user._id,
+      });
     });
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({ message: "This route already has a scheduled duty on this date." });
     }
-    throw error;
+    return respondToHttpError(error, res);
   }
 
   logDeploymentActivity({
@@ -398,16 +425,17 @@ export const deleteExtraRunCutDay = async (req, res) => {
     return res.status(400).json({ message: "Only an extra duty added here can be removed this way." });
   }
 
-  logDeploymentActivity({
+  const activity = {
     division: runCutDay.division,
     user: req.user,
     action: "runcutday.extra_removed",
     summary: `Removed extra run for ${runCutDay.route.code} on ${isoDate(runCutDay.date)}`,
-  });
+  };
 
   const division = runCutDay.division;
   const month = isoDate(runCutDay.date).slice(0, 7);
-  await runCutDay.deleteOne();
+  await runInTransaction(() => runCutDay.deleteOne());
+  logDeploymentActivity(activity);
   queueOperationsRefresh(division, month);
   res.json({ message: "Extra duty removed" });
 };

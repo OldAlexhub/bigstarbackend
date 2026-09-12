@@ -1,14 +1,14 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import connectTodb from "../db/connectTodb.js";
-import RunCut from "../models/RunCut.js";
-import RunCutDay from "../models/RunCutDay.js";
-import Division from "../models/Division.js";
-import { computeHours } from "../utils/hours.js";
-import { getEffectiveThresholds } from "../utils/thresholds.js";
-import { rolloverAssignments } from "../jobs/rolloverAssignments.js";
+import connectTodb from "../../db/connectTodb.js";
+import RunCut from "../../models/RunCut.js";
+import RunCutDay from "../../models/RunCutDay.js";
+import Division from "../../models/Division.js";
+import { computeHours } from "../../utils/hours.js";
+import { getEffectiveThresholds } from "../../utils/thresholds.js";
+import { rolloverAssignments } from "../../jobs/rolloverAssignments.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const todayUTC = () => {
   const now = new Date();

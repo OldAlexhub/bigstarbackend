@@ -1,16 +1,16 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import connectTodb from "../db/connectTodb.js";
-import Division from "../models/Division.js";
-import Route from "../models/Route.js";
-import Vehicle from "../models/Vehicle.js";
-import RunCutDay from "../models/RunCutDay.js";
-import RunCut from "../models/RunCut.js";
-import DailyIssueLog from "../models/DailyIssueLog.js";
-import WeeklyDivisionSummary from "../models/WeeklyDivisionSummary.js";
-import User from "../models/User.js";
+import connectTodb from "../../db/connectTodb.js";
+import Division from "../../models/Division.js";
+import Route from "../../models/Route.js";
+import Vehicle from "../../models/Vehicle.js";
+import RunCutDay from "../../models/RunCutDay.js";
+import RunCut from "../../models/RunCut.js";
+import DailyIssueLog from "../../models/DailyIssueLog.js";
+import WeeklyDivisionSummary from "../../models/WeeklyDivisionSummary.js";
+import User from "../../models/User.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 // A handful of divisions were accidentally split into a base division plus a
 // same-service "(PM)" / "Night/Weekend" shift variant, unlike deliberately

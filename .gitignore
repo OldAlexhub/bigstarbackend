@@ -1,5 +1,27 @@
-node_modules
+# Dependencies
+/node_modules/
+
+# Environment and local configuration
 .env
-.env.local
+.env.*
+!.env.example
+
+# Test/build output
+/coverage/
+/dist/
+/build/
+
+# Logs and temporary files
+*.log
 npm-debug.log*
-seed.js
+yarn-debug.log*
+yarn-error.log*
+*.tmp
+*.temp
+.cache/
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

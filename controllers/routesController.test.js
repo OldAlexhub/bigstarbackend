@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import mongoose from "mongoose";
 import Route from "../models/Route.js";
 import RunCut from "../models/RunCut.js";
 import RunCutDay from "../models/RunCutDay.js";
@@ -42,6 +43,7 @@ test("route removal retires the route while preserving its historical identity",
     deleteDays: RunCutDay.deleteMany,
     deleteIssues: DailyIssueLog.deleteMany,
     deleteRunCut: RunCut.deleteOne,
+    transaction: mongoose.connection.transaction,
   };
   let saved = false;
   let hardDeleted = false;
@@ -58,6 +60,7 @@ test("route removal retires the route while preserving its historical identity",
   RunCutDay.deleteMany = async () => ({});
   DailyIssueLog.deleteMany = async () => ({});
   RunCut.deleteOne = async () => ({});
+  mongoose.connection.transaction = async (work) => work();
   try {
     const res = response();
     await deleteRoute({ user: { role: "ELT", divisionAccess: [] }, params: { id: "route-1" } }, res);
@@ -72,5 +75,6 @@ test("route removal retires the route while preserving its historical identity",
     RunCutDay.deleteMany = originals.deleteDays;
     DailyIssueLog.deleteMany = originals.deleteIssues;
     RunCut.deleteOne = originals.deleteRunCut;
+    mongoose.connection.transaction = originals.transaction;
   }
 });

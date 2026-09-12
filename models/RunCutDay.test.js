@@ -44,3 +44,17 @@ test("RunCutDay accepts a status-owned disposition", async () => {
 
   await runCutDay.validate();
 });
+
+test("standby coverage has a partial unique concurrency guard", () => {
+  const coverageIndex = RunCutDay.schema.indexes().find(([, options]) =>
+    options.name === "one_deployed_standby_per_covered_route"
+  );
+  assert.ok(coverageIndex);
+  assert.deepEqual(coverageIndex[0], { division: 1, date: 1, coveringRoute: 1 });
+  assert.equal(coverageIndex[1].unique, true);
+  assert.equal(coverageIndex[1].name, "one_deployed_standby_per_covered_route");
+  assert.deepEqual(coverageIndex[1].partialFilterExpression, {
+    deployed: true,
+    coveringRoute: { $type: "objectId" },
+  });
+});

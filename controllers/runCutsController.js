@@ -13,6 +13,8 @@ import {
 } from "../utils/resolveAssignment.js";
 import { addMonths, monthInTimezone } from "../utils/operationsKpis.js";
 import { queueOperationsRefresh } from "../utils/operationsReporting.js";
+import { runInTransaction } from "../utils/transaction.js";
+import { httpError, respondToHttpError } from "../utils/httpError.js";
 
 const queueProjectedMonths = (division, timezone) => {
   const month = monthInTimezone(timezone);
@@ -68,137 +70,161 @@ export const createRunCut = async (req, res) => {
     return res.status(403).json({ message: "No access to this division" });
   }
 
-  const [operator, vehicle] = await Promise.all([resolveOperator(operatorName), resolveVehicle(division, vehicleCode)]);
+  let runCutId;
+  let timezone;
+  try {
+    await runInTransaction(async () => {
+      const operator = await resolveOperator(operatorName);
+      const vehicle = await resolveVehicle(division, vehicleCode);
+      const conflict = await findOperatorConflict({
+        operator,
+        daysOfWeek: daysOfWeek || [],
+        startTime,
+        endTime,
+      });
+      if (conflict) throw httpError(409, conflictMessage(conflict));
 
-  const conflict = await findOperatorConflict({
-    operator,
-    daysOfWeek: daysOfWeek || [],
-    startTime,
-    endTime,
-  });
-  if (conflict) return res.status(409).json({ message: conflictMessage(conflict) });
+      const divisionDoc = await Division.findById(division);
+      const thresholds = await getEffectiveThresholds(divisionDoc);
+      const resolvedStatus = status || "active";
+      const { serviceHours, revenueHours } = computeHours({
+        startTime,
+        endTime,
+        status: resolvedStatus,
+        ...thresholds,
+      });
 
-  const divisionDoc = await Division.findById(division);
-  const thresholds = await getEffectiveThresholds(divisionDoc);
-  const resolvedStatus = status || "active";
-  const { serviceHours, revenueHours } = computeHours({
-    startTime,
-    endTime,
-    status: resolvedStatus,
-    ...thresholds,
-  });
+      const runCut = await RunCut.create({
+        division,
+        route,
+        daysOfWeek: daysOfWeek || [],
+        operator,
+        vehicle,
+        pulloutAddress,
+        startTime,
+        endTime,
+        status: resolvedStatus,
+        serviceHours,
+        revenueHours,
+        updatedBy: req.user._id,
+      });
 
-  const runCut = await RunCut.create({
-    division,
-    route,
-    daysOfWeek: daysOfWeek || [],
-    operator,
-    vehicle,
-    pulloutAddress,
-    startTime,
-    endTime,
-    status: resolvedStatus,
-    serviceHours,
-    revenueHours,
-    updatedBy: req.user._id,
-  });
+      await projectAssignment(runCut, req.user._id);
+      runCutId = runCut._id;
+      timezone = divisionDoc.timezone;
+    });
+  } catch (error) {
+    return respondToHttpError(error, res);
+  }
 
-  await projectAssignment(runCut, req.user._id);
-  queueProjectedMonths(division, divisionDoc.timezone);
-  const populated = await populateRunCut(RunCut.findById(runCut._id));
+  queueProjectedMonths(division, timezone);
+  const populated = await populateRunCut(RunCut.findById(runCutId));
   res.status(201).json({ runCut: populated });
 };
 
 export const updateRunCut = async (req, res) => {
-  const runCut = await RunCut.findById(req.params.id);
-  if (!runCut) return res.status(404).json({ message: "Run cut not found" });
-  if (!canAccessDivision(req.user, runCut.division)) {
-    return res.status(403).json({ message: "No access to this division" });
+  let runCutId;
+  let division;
+  let timezone;
+  try {
+    await runInTransaction(async () => {
+      const runCut = await RunCut.findById(req.params.id);
+      if (!runCut) throw httpError(404, "Run cut not found");
+      if (!canAccessDivision(req.user, runCut.division)) {
+        throw httpError(403, "No access to this division");
+      }
+
+      const body = { ...req.body };
+      if (body.operatorName !== undefined) {
+        body.operator = await resolveOperator(body.operatorName);
+        delete body.operatorName;
+      }
+      if (body.vehicleCode !== undefined) {
+        body.vehicle = await resolveVehicle(runCut.division, body.vehicleCode);
+        delete body.vehicleCode;
+      }
+
+      const editableFields = [
+        "daysOfWeek",
+        "operator",
+        "vehicle",
+        "pulloutAddress",
+        "startTime",
+        "endTime",
+        "status",
+        "clientNotes",
+        "disruptionType",
+        "disruptionNotes",
+      ];
+      const changes = [];
+      for (const field of editableFields) {
+        if (body[field] === undefined) continue;
+        const oldValue = runCut[field];
+        const newValue = body[field];
+        const changed =
+          field === "daysOfWeek"
+            ? JSON.stringify([...(oldValue || [])].sort()) !== JSON.stringify([...(newValue || [])].sort())
+            : String(oldValue ?? "") !== String(newValue ?? "");
+        if (changed) {
+          changes.push({ field, oldValue, newValue });
+          runCut[field] = newValue;
+        }
+      }
+
+      const conflict = await findOperatorConflict({
+        operator: runCut.operator,
+        daysOfWeek: runCut.daysOfWeek,
+        startTime: runCut.startTime,
+        endTime: runCut.endTime,
+        excludeRunCutId: runCut._id,
+      });
+      if (conflict) throw httpError(409, conflictMessage(conflict));
+
+      const divisionDoc = await Division.findById(runCut.division);
+      const thresholds = await getEffectiveThresholds(divisionDoc);
+      const { serviceHours, revenueHours } = computeHours({
+        startTime: runCut.startTime,
+        endTime: runCut.endTime,
+        status: runCut.status,
+        ...thresholds,
+      });
+      runCut.serviceHours = serviceHours;
+      runCut.revenueHours = revenueHours;
+      runCut.updatedBy = req.user._id;
+
+      await runCut.save();
+      await projectAssignment(runCut, req.user._id);
+
+      if (changes.length) {
+        await ChangeLog.insertMany(
+          changes.map((change) => ({
+            entityType: "RunCut",
+            entityId: runCut._id,
+            field: change.field,
+            oldValue: change.oldValue,
+            newValue: change.newValue,
+            changedBy: req.user._id,
+          }))
+        );
+      }
+
+      runCutId = runCut._id;
+      division = runCut.division;
+      timezone = divisionDoc.timezone;
+    });
+  } catch (error) {
+    return respondToHttpError(error, res);
   }
 
-  const body = { ...req.body };
-  if (body.operatorName !== undefined) {
-    body.operator = await resolveOperator(body.operatorName);
-    delete body.operatorName;
-  }
-  if (body.vehicleCode !== undefined) {
-    body.vehicle = await resolveVehicle(runCut.division, body.vehicleCode);
-    delete body.vehicleCode;
-  }
-
-  const editableFields = [
-    "daysOfWeek",
-    "operator",
-    "vehicle",
-    "pulloutAddress",
-    "startTime",
-    "endTime",
-    "status",
-    "clientNotes",
-    "disruptionType",
-    "disruptionNotes",
-  ];
-  const changes = [];
-  for (const field of editableFields) {
-    if (body[field] === undefined) continue;
-    const oldValue = runCut[field];
-    const newValue = body[field];
-    const changed =
-      field === "daysOfWeek"
-        ? JSON.stringify([...(oldValue || [])].sort()) !== JSON.stringify([...(newValue || [])].sort())
-        : String(oldValue ?? "") !== String(newValue ?? "");
-    if (changed) {
-      changes.push({ field, oldValue, newValue });
-      runCut[field] = newValue;
-    }
-  }
-
-  const conflict = await findOperatorConflict({
-    operator: runCut.operator,
-    daysOfWeek: runCut.daysOfWeek,
-    startTime: runCut.startTime,
-    endTime: runCut.endTime,
-    excludeRunCutId: runCut._id,
-  });
-  if (conflict) return res.status(409).json({ message: conflictMessage(conflict) });
-
-  const divisionDoc = await Division.findById(runCut.division);
-  const thresholds = await getEffectiveThresholds(divisionDoc);
-  const { serviceHours, revenueHours } = computeHours({
-    startTime: runCut.startTime,
-    endTime: runCut.endTime,
-    status: runCut.status,
-    ...thresholds,
-  });
-  runCut.serviceHours = serviceHours;
-  runCut.revenueHours = revenueHours;
-  runCut.updatedBy = req.user._id;
-
-  await runCut.save();
-  await projectAssignment(runCut, req.user._id);
-  queueProjectedMonths(runCut.division, divisionDoc.timezone);
-
-  if (changes.length) {
-    await ChangeLog.insertMany(
-      changes.map((change) => ({
-        entityType: "RunCut",
-        entityId: runCut._id,
-        field: change.field,
-        oldValue: change.oldValue,
-        newValue: change.newValue,
-        changedBy: req.user._id,
-      }))
-    );
-  }
-
-  const populated = await populateRunCut(RunCut.findById(runCut._id));
+  queueProjectedMonths(division, timezone);
+  const populated = await populateRunCut(RunCut.findById(runCutId));
 
   // A vehicle/day/time edit can change which OTHER rows in the division are
   // now (or no longer) double-booked, not just this one — recomputed here
   // and sent back alongside the edited row so the client can patch every
   // affected row's flag in place instead of reloading the whole division's
   // list (the previous full-reload was the visible "refresh" on every edit).
-  const divisionRunCuts = await RunCut.find({ division: runCut.division }, "vehicle daysOfWeek startTime endTime");
+  const divisionRunCuts = await RunCut.find({ division }, "vehicle daysOfWeek startTime endTime");
   const conflictIds = findVehicleConflictIds(divisionRunCuts);
   const vehicleConflicts = Object.fromEntries(
     divisionRunCuts.map((rc) => [rc._id.toString(), conflictIds.has(rc._id.toString())])
@@ -208,15 +234,26 @@ export const updateRunCut = async (req, res) => {
 };
 
 export const deleteRunCut = async (req, res) => {
-  const runCut = await RunCut.findById(req.params.id);
-  if (!runCut) return res.status(404).json({ message: "Run cut not found" });
-  if (!canAccessDivision(req.user, runCut.division)) {
-    return res.status(403).json({ message: "No access to this division" });
+  let division;
+  let timezone;
+  try {
+    await runInTransaction(async () => {
+      const runCut = await RunCut.findById(req.params.id);
+      if (!runCut) throw httpError(404, "Run cut not found");
+      if (!canAccessDivision(req.user, runCut.division)) {
+        throw httpError(403, "No access to this division");
+      }
+      const divisionDoc = await Division.findById(runCut.division);
+      runCut.daysOfWeek = [];
+      await projectAssignment(runCut, req.user._id);
+      await runCut.deleteOne();
+      division = runCut.division;
+      timezone = divisionDoc?.timezone;
+    });
+  } catch (error) {
+    return respondToHttpError(error, res);
   }
-  const divisionDoc = await Division.findById(runCut.division);
-  runCut.daysOfWeek = [];
-  await projectAssignment(runCut, req.user._id);
-  queueProjectedMonths(runCut.division, divisionDoc?.timezone);
-  await runCut.deleteOne();
+
+  queueProjectedMonths(division, timezone);
   res.json({ message: "Run cut deleted" });
 };
