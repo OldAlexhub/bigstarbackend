@@ -42,6 +42,7 @@ const capJson = (cap, user) => {
     division: cap.division,
     kpiKey: cap.kpiKey,
     kpiLabel: KPI_BY_KEY[cap.kpiKey]?.label || cap.kpiKey,
+    kpiFormat: KPI_BY_KEY[cap.kpiKey]?.format,
     triggerMonth: cap.triggerMonth,
     firstEnteredAt: cap.firstEnteredAt,
     valueAtCapDate: cap.valueAtCapDate,
