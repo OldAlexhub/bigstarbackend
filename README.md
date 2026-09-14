@@ -56,7 +56,7 @@ Historical scripts are organized and documented under [`scripts/`](scripts/READM
 - Node.js with ES modules
 - Express 5
 - MongoDB / Mongoose 9
-- JWT stored in an HTTP-only cookie
+- JWT stored in an HTTP-only cookie, with a session-scoped bearer fallback for browsers that block cross-site cookies
 - PDFKit and the patched SheetJS 0.20.3 distribution for spreadsheet import/export
 
 ---

@@ -15,6 +15,11 @@ const cookieOptions = {
   httpOnly: true,
   sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   secure: process.env.NODE_ENV === "production",
+  // Modern browsers may partition cross-site cookies. Marking the production
+  // cookie as partitioned lets it remain usable when the client and API are
+  // hosted on different sites, while the bearer token returned below is the
+  // compatibility fallback for browsers that reject third-party cookies.
+  partitioned: process.env.NODE_ENV === "production",
   maxAge: 8 * 60 * 60 * 1000,
 };
 
@@ -41,7 +46,7 @@ export const login = async (req, res) => {
 
   const token = signToken(user);
   res.cookie("token", token, cookieOptions);
-  res.json({ user: user.toPublicJSON() });
+  res.json({ user: user.toPublicJSON(), token });
 };
 
 export const logout = (req, res) => {
