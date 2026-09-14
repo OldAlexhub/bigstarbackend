@@ -10,6 +10,16 @@ const settingsSchema = new mongoose.Schema(
       type: Number,
       default: 0.9,
     },
+    osrAdvanceDays: {
+      type: Number,
+      min: 0,
+      max: 7,
+      validate: {
+        validator: Number.isInteger,
+        message: "OSR advance days must be a whole number",
+      },
+      default: 7,
+    },
     operationsReportingStartMonth: {
       type: String,
       default: () => new Date().toISOString().slice(0, 7),

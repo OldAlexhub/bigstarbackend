@@ -18,7 +18,7 @@ const main = async () => {
     { $match: { deployed: true, coveringRoute: { $type: "objectId" } } },
     {
       $group: {
-        _id: { division: "$division", date: "$date", coveringRoute: "$coveringRoute" },
+        _id: { date: "$date", coveringRoute: "$coveringRoute" },
         count: { $sum: 1 },
       },
     },

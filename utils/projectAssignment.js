@@ -6,11 +6,9 @@ import { getEffectiveThresholds } from "./thresholds.js";
 import { syncAutoIssuesBulk } from "./autoIssueSync.js";
 import { todayInTimezone } from "./timezone.js";
 
-// 6 days: guarantees the current calendar week is always fully generated
-// (worst case, "today" is Monday) — the furthest any consumer actually
-// reads (Tracker/home summary cap at the current week; Deployment caps at
-// tomorrow). Anything further out was pure unread waste.
-export const PROJECTION_HORIZON_DAYS = 6;
+// Generate through today + 7 so the maximum OSR planning window always has
+// a daily schedule. A lower configured limit simply exposes fewer dates.
+export const PROJECTION_HORIZON_DAYS = 7;
 
 const dayOfWeekFor = (date) => DAYS_OF_WEEK[new Date(date).getUTCDay()];
 
@@ -79,15 +77,29 @@ export const projectAssignment = async (runCut, userId, { horizonDays = PROJECTI
               division: { $ifNull: ["$division", runCut.division] },
               route: { $ifNull: ["$route", runCut.route] },
               date: { $ifNull: ["$date", date] },
-              operator: runCut.operator,
-              vehicle: runCut.vehicle,
-              pulloutAddress: runCut.pulloutAddress,
-              startTime: runCut.startTime,
-              endTime: runCut.endTime,
+              operator: { $cond: ["$overrides.operator", "$operator", runCut.operator] },
+              vehicle: { $cond: ["$overrides.vehicle", "$vehicle", runCut.vehicle] },
+              pulloutAddress: {
+                $cond: ["$overrides.pulloutAddress", "$pulloutAddress", runCut.pulloutAddress],
+              },
+              startTime: { $cond: ["$overrides.startTime", "$startTime", runCut.startTime] },
+              endTime: { $cond: ["$overrides.endTime", "$endTime", runCut.endTime] },
               updatedBy: userId,
               status: { $cond: ["$overrides.status", "$status", runCut.status] },
-              serviceHours: { $cond: ["$overrides.status", "$serviceHours", serviceHours] },
-              revenueHours: { $cond: ["$overrides.status", "$revenueHours", revenueHours] },
+              serviceHours: {
+                $cond: [
+                  { $or: ["$overrides.status", "$overrides.startTime", "$overrides.endTime"] },
+                  "$serviceHours",
+                  serviceHours,
+                ],
+              },
+              revenueHours: {
+                $cond: [
+                  { $or: ["$overrides.status", "$overrides.startTime", "$overrides.endTime"] },
+                  "$revenueHours",
+                  revenueHours,
+                ],
+              },
               clientNotes: { $cond: ["$overrides.clientNotes", "$clientNotes", runCut.clientNotes] },
               disruptionType: { $cond: ["$overrides.disruption", "$disruptionType", runCut.disruptionType] },
               disruptionNotes: { $cond: ["$overrides.disruption", "$disruptionNotes", runCut.disruptionNotes] },

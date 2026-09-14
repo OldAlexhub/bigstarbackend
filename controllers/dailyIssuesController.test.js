@@ -126,3 +126,47 @@ test("Issue Log applies the selected inclusive from/to date range", async () => 
     DailyIssueLog.find = originalFind;
   }
 });
+
+test("OSR-only reporting filters the exported issue rows", async () => {
+  const originalFindById = Division.findById;
+  const originalFind = DailyIssueLog.find;
+  let receivedFilter;
+  Division.findById = async () => ({ _id: "division-1", code: "D1" });
+  DailyIssueLog.find = (filter) => {
+    receivedFilter = filter;
+    return {
+      populate() {
+        return this;
+      },
+      sort() {
+        return this;
+      },
+      limit() {
+        return Promise.resolve([]);
+      },
+    };
+  };
+
+  try {
+    const response = responseRecorder();
+    await exportDailyIssues(
+      {
+        user: { role: "ELT" },
+        query: {
+          division: "division-1",
+          from: "2026-09-01",
+          to: "2026-09-09",
+          format: "csv",
+          osr: "1",
+        },
+      },
+      response
+    );
+
+    assert.equal(receivedFilter.disruptionType, "OSR (Out of Service Request)");
+    assert.match(response.headers["Content-Disposition"], /D1-osrs-2026-09-01-to-2026-09-09\.csv/);
+  } finally {
+    Division.findById = originalFindById;
+    DailyIssueLog.find = originalFind;
+  }
+});

@@ -4,6 +4,7 @@ import Division from "../models/Division.js";
 import { canAccessDivision } from "../middleware/access.js";
 import { logDeploymentActivity } from "../utils/deploymentActivityLog.js";
 import { parseInclusiveDateRange } from "../utils/dateRange.js";
+import { OSR_DISRUPTION_TYPE } from "../utils/disruptionTypes.js";
 
 const REPORT_HEADERS = ["Date", "Route", "Operator", "Disruption", "Notes"];
 const toISODate = (date) => new Date(date).toISOString().slice(0, 10);
@@ -43,6 +44,7 @@ const loadReportRows = async (req) => {
   const issues = await DailyIssueLog.find({
     division,
     date: { $gte: range.fromInclusive, $lt: range.toExclusive },
+    ...(req.query.osr === "1" ? { disruptionType: OSR_DISRUPTION_TYPE } : {}),
   })
     .populate("route", "code")
     .populate("operator", "name")
@@ -212,7 +214,7 @@ export const exportDailyIssues = async (req, res) => {
 
   const { from, to } = req.query;
   const format = req.query.format === "xlsx" ? "xlsx" : "csv";
-  const filenameBase = `${divisionDoc.code}-issues-${from}-to-${to}`;
+  const filenameBase = `${divisionDoc.code}-${req.query.osr === "1" ? "osrs" : "issues"}-${from}-to-${to}`;
   const rows = issues.map((i) => [
     toISODate(i.date),
     i.route?.code || "",

@@ -115,6 +115,11 @@ const runCutDaySchema = new mongoose.Schema(
     // alone instead of overwriting them — a Deployment-side exception
     // applies to this day only, never the ongoing schedule.
     overrides: {
+      operator: { type: Boolean, default: false },
+      vehicle: { type: Boolean, default: false },
+      pulloutAddress: { type: Boolean, default: false },
+      startTime: { type: Boolean, default: false },
+      endTime: { type: Boolean, default: false },
       status: { type: Boolean, default: false },
       clientNotes: { type: Boolean, default: false },
       disruption: { type: Boolean, default: false },
@@ -131,11 +136,11 @@ const runCutDaySchema = new mongoose.Schema(
 runCutDaySchema.index({ division: 1, route: 1, date: 1 }, { unique: true });
 runCutDaySchema.index({ division: 1, date: 1 });
 runCutDaySchema.index(
-  { division: 1, date: 1, coveringRoute: 1 },
+  { date: 1, coveringRoute: 1 },
   {
     unique: true,
     partialFilterExpression: { deployed: true, coveringRoute: { $type: "objectId" } },
-    name: "one_deployed_standby_per_covered_route",
+    name: "one_deployed_standby_per_covered_route_global",
   }
 );
 

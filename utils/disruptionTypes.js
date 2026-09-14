@@ -1,8 +1,5 @@
-// OSR ("Out of Service Request") is the one disruption type with an
-// automated side effect: picking it also suspends the route for tomorrow
-// only (see runCutDaysController.updateRunCutDayException) — a day-specific
-// override, same as everything else Deployment sets, so it auto-reverts the
-// day after instead of touching the ongoing Master Run Cuts plan.
+// An OSR suspends its selected RunCutDay only. The allowed planning window
+// is controlled by Settings and the persistent Master Run Cut is untouched.
 export const OSR_DISRUPTION_TYPE = "OSR (Out of Service Request)";
 
 export const DISRUPTION_TYPES = [

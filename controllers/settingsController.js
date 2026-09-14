@@ -15,9 +15,16 @@ export const getSettings = async (req, res) => {
 
 export const updateSettings = async (req, res) => {
   const settings = await Settings.getSingleton();
-  const { breakMinutes, revenueRatio, operationsReportingStartMonth } = req.body;
+  const { breakMinutes, revenueRatio, osrAdvanceDays, operationsReportingStartMonth } = req.body;
   if (breakMinutes !== undefined) settings.breakMinutes = breakMinutes;
   if (revenueRatio !== undefined) settings.revenueRatio = revenueRatio;
+  if (osrAdvanceDays !== undefined) {
+    const parsedDays = Number(osrAdvanceDays);
+    if (!Number.isInteger(parsedDays) || parsedDays < 0 || parsedDays > 7) {
+      return res.status(400).json({ message: "OSR advance days must be a whole number from 0 through 7." });
+    }
+    settings.osrAdvanceDays = parsedDays;
+  }
   if (operationsReportingStartMonth !== undefined) {
     if (!isCalendarMonth(operationsReportingStartMonth)) {
       return res.status(400).json({ message: "Choose a valid CAP activation month." });

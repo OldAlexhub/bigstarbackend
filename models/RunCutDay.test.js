@@ -32,6 +32,11 @@ test("a new RunCutDay starts without a disposition", () => {
   assert.equal(runCutDay.disposition, null);
   assert.equal(runCutDay.dispositionSource, null);
   assert.equal(runCutDay.dispositionStandbyDay, null);
+  assert.equal(runCutDay.overrides.operator, false);
+  assert.equal(runCutDay.overrides.vehicle, false);
+  assert.equal(runCutDay.overrides.pulloutAddress, false);
+  assert.equal(runCutDay.overrides.startTime, false);
+  assert.equal(runCutDay.overrides.endTime, false);
 });
 
 test("RunCutDay accepts a status-owned disposition", async () => {
@@ -47,12 +52,12 @@ test("RunCutDay accepts a status-owned disposition", async () => {
 
 test("standby coverage has a partial unique concurrency guard", () => {
   const coverageIndex = RunCutDay.schema.indexes().find(([, options]) =>
-    options.name === "one_deployed_standby_per_covered_route"
+    options.name === "one_deployed_standby_per_covered_route_global"
   );
   assert.ok(coverageIndex);
-  assert.deepEqual(coverageIndex[0], { division: 1, date: 1, coveringRoute: 1 });
+  assert.deepEqual(coverageIndex[0], { date: 1, coveringRoute: 1 });
   assert.equal(coverageIndex[1].unique, true);
-  assert.equal(coverageIndex[1].name, "one_deployed_standby_per_covered_route");
+  assert.equal(coverageIndex[1].name, "one_deployed_standby_per_covered_route_global");
   assert.deepEqual(coverageIndex[1].partialFilterExpression, {
     deployed: true,
     coveringRoute: { $type: "objectId" },

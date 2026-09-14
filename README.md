@@ -45,7 +45,7 @@ npm run maintenance:create-admin
 npm run maintenance:verify-production
 ```
 
-Run the migration command only when upgrading data created before the unique daily-issue identity constraint. It is safe to rerun and keeps the preferred issue record when duplicates exist.
+Run the daily-issue migration only when upgrading data created before the unique daily-issue identity constraint. It is safe to rerun and keeps the preferred issue record when duplicates exist.
 
 Run the production preflight against the target database before deployment. It is read-only and verifies transaction support plus the absence of duplicate deployed standby coverage that would prevent the protective unique index from being installed.
 

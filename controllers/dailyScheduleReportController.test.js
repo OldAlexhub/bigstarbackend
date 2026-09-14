@@ -19,9 +19,15 @@ const responseRecorder = () => ({
 
 test("disposition-only changes do not alter today's or tomorrow's client report", async () => {
   const originalFindById = Division.findById;
+  const originalDivisionFind = Division.find;
   const originalFind = RunCutDay.find;
   let days = [];
-  Division.findById = async () => ({ _id: "division-1", code: "D1", name: "Division 1" });
+  Division.findById = () => {
+    const result = Promise.resolve({ _id: "division-1", code: "D1", name: "Division 1" });
+    result.select = () => result;
+    return result;
+  };
+  Division.find = () => ({ distinct: async () => ["division-1"] });
   RunCutDay.find = () => {
     const query = {
       populate() {
@@ -68,6 +74,66 @@ test("disposition-only changes do not alter today's or tomorrow's client report"
     }
   } finally {
     Division.findById = originalFindById;
+    Division.find = originalDivisionFind;
     RunCutDay.find = originalFind;
+  }
+});
+
+test("a standby from a sibling branch is used in the selected branch's client report", async () => {
+  const originalFindById = Division.findById;
+  const originalDivisionFind = Division.find;
+  const originalRunCutDayFind = RunCutDay.find;
+  const divisionDoc = { _id: "golink", code: "DIV_3_GL", name: "Division 3 - GoLink", parentDivision: "ada" };
+
+  Division.findById = () => {
+    const result = Promise.resolve(divisionDoc);
+    result.select = () => result;
+    return result;
+  };
+  Division.find = () => ({ distinct: async () => ["ada", "golink"] });
+  RunCutDay.find = () => ({
+    populate() {
+      return this;
+    },
+    sort() {
+      return Promise.resolve([
+        {
+          division: "golink",
+          route: { _id: "gl-route", code: "GL-1", type: "standard" },
+          operator: null,
+          vehicle: null,
+          status: "unassigned",
+          clientNotes: "",
+        },
+        {
+          division: "ada",
+          route: { _id: "standby-route", code: "STBY-1", type: "standby" },
+          operator: { name: "Shared Operator" },
+          vehicle: { code: "SHARED-BUS" },
+          pulloutAddress: "Shared Garage",
+          startTime: "08:00",
+          endTime: "16:00",
+          deployed: true,
+          coveringRoute: { _id: "gl-route", code: "GL-1" },
+        },
+      ]);
+    },
+  });
+
+  try {
+    const response = responseRecorder();
+    await getDailyScheduleReport(
+      { user: { role: "ELT" }, query: { division: "golink", date: "2026-09-14" } },
+      response
+    );
+
+    assert.equal(response.body.rows.length, 1);
+    assert.equal(response.body.rows[0].operator, "Shared Operator");
+    assert.equal(response.body.rows[0].vehicle, "SHARED-BUS");
+    assert.match(response.body.rows[0].clientNotes, /Covered by standby STBY-1/);
+  } finally {
+    Division.findById = originalFindById;
+    Division.find = originalDivisionFind;
+    RunCutDay.find = originalRunCutDayFind;
   }
 });
