@@ -9,6 +9,8 @@ import { assertTransactionSupport } from "./db/transactionSupport.js";
 import { validateEnvironment } from "./config/environment.js";
 import RunCutDay from "./models/RunCutDay.js";
 import LoginRateLimitCounter from "./models/LoginRateLimitCounter.js";
+import ReallocationRequest from "./models/ReallocationRequest.js";
+import TeamPost from "./models/TeamPost.js";
 import authRoutes from "./routes/authRoutes.js";
 import divisionsRoutes from "./routes/divisionsRoutes.js";
 import routesRoutes from "./routes/routesRoutes.js";
@@ -30,9 +32,12 @@ import networkSuccessRoutes from "./routes/networkSuccessRoutes.js";
 import customerServiceRoutes from "./routes/customerServiceRoutes.js";
 import safetyRoutes from "./routes/safetyRoutes.js";
 import operationsReportingRoutes from "./routes/operationsReportingRoutes.js";
+import reallocationRequestsRoutes from "./routes/reallocationRequestsRoutes.js";
+import teamPostsRoutes from "./routes/teamPostsRoutes.js";
 import { scheduleWeeklyFinalization } from "./jobs/finalizeWeeks.js";
 import { scheduleAssignmentRollover } from "./jobs/rolloverAssignments.js";
 import { scheduleOperationsReconciliation } from "./jobs/reconcileOperationsReporting.js";
+import { scheduleReallocationApplications } from "./jobs/applyReallocationRequests.js";
 
 dotenv.config({ quiet: true });
 
@@ -90,6 +95,8 @@ app.use("/api/network-success", networkSuccessRoutes);
 app.use("/api/customer-service", customerServiceRoutes);
 app.use("/api/safety", safetyRoutes);
 app.use("/api/operations-reporting", operationsReportingRoutes);
+app.use("/api/reallocation-requests", reallocationRequestsRoutes);
+app.use("/api/team-posts", teamPostsRoutes);
 
 let httpServer;
 let shuttingDown = false;
@@ -131,6 +138,8 @@ const start = async () => {
   await assertTransactionSupport(database);
   await RunCutDay.createIndexes();
   await LoginRateLimitCounter.createIndexes();
+  await ReallocationRequest.createIndexes();
+  await TeamPost.createIndexes();
   if (shuttingDown) return;
   httpServer = app.listen(config.port, () => {
     console.log(`Server is running on port ${config.port}`);
@@ -139,7 +148,8 @@ const start = async () => {
   scheduledJobs.push(
     scheduleWeeklyFinalization(),
     scheduleAssignmentRollover(),
-    scheduleOperationsReconciliation()
+    scheduleOperationsReconciliation(),
+    scheduleReallocationApplications()
   );
 };
 

@@ -16,15 +16,18 @@ export const divisionFilter = (user) => {
   return { _id: { $in: user.divisionAccess } };
 };
 
+export const canAccessSection = (user, section) =>
+  user.role === "ELT" || (user.sections || []).includes(section);
+
 export const requireSection = (section) => (req, res, next) => {
-  if (req.user.role === "ELT" || req.user.sections.includes(section)) {
+  if (canAccessSection(req.user, section)) {
     return next();
   }
   return res.status(403).json({ message: "Access to this section is required" });
 };
 
 export const requireAnySection = (sections) => (req, res, next) => {
-  if (req.user.role === "ELT" || sections.some((section) => req.user.sections.includes(section))) {
+  if (req.user.role === "ELT" || sections.some((section) => (req.user.sections || []).includes(section))) {
     return next();
   }
   return res.status(403).json({ message: "Access to this section is required" });

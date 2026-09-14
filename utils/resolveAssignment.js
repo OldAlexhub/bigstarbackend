@@ -55,12 +55,14 @@ export const timeRangesOverlap = (aStart, aEnd, bStart, bEnd) => {
 // double-book an operator on an overlapping day and time. Checked across
 // every division (operators are company-wide), not just the one being
 // edited.
-export const findOperatorConflict = async ({ operator, daysOfWeek, startTime, endTime, excludeRunCutId }) => {
+export const findOperatorConflict = async ({ operator, daysOfWeek, startTime, endTime, excludeRunCutId, excludeRunCutIds = [] }) => {
   if (!operator || !daysOfWeek?.length || !startTime || !endTime) return null;
+
+  const excludedIds = [...excludeRunCutIds, ...(excludeRunCutId ? [excludeRunCutId] : [])];
 
   const candidates = await RunCut.find({
     operator,
-    _id: { $ne: excludeRunCutId },
+    ...(excludedIds.length && { _id: { $nin: excludedIds } }),
     daysOfWeek: { $in: daysOfWeek },
   }).populate("route", "code");
 

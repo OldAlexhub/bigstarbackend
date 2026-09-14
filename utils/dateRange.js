@@ -1,6 +1,6 @@
 const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-const parseDateOnly = (value, label) => {
+export const parseDateOnly = (value, label) => {
   const match = DATE_ONLY_PATTERN.exec(String(value || ""));
   if (!match) return { error: `${label} must be a valid date in YYYY-MM-DD format` };
 
