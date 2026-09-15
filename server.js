@@ -11,6 +11,10 @@ import RunCutDay from "./models/RunCutDay.js";
 import LoginRateLimitCounter from "./models/LoginRateLimitCounter.js";
 import ReallocationRequest from "./models/ReallocationRequest.js";
 import TeamPost from "./models/TeamPost.js";
+import EltOutlookSnapshot from "./models/EltOutlookSnapshot.js";
+import Operator from "./models/Operator.js";
+import Vehicle from "./models/Vehicle.js";
+import RunCut from "./models/RunCut.js";
 import authRoutes from "./routes/authRoutes.js";
 import divisionsRoutes from "./routes/divisionsRoutes.js";
 import routesRoutes from "./routes/routesRoutes.js";
@@ -38,6 +42,7 @@ import { scheduleWeeklyFinalization } from "./jobs/finalizeWeeks.js";
 import { scheduleAssignmentRollover } from "./jobs/rolloverAssignments.js";
 import { scheduleOperationsReconciliation } from "./jobs/reconcileOperationsReporting.js";
 import { scheduleReallocationApplications } from "./jobs/applyReallocationRequests.js";
+import { backfillAssignmentRosters } from "./utils/backfillAssignmentRosters.js";
 
 dotenv.config({ quiet: true });
 
@@ -136,10 +141,20 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 const start = async () => {
   const database = await connectTodb(config.mongoUrl);
   await assertTransactionSupport(database);
+  const rosterBackfill = await backfillAssignmentRosters();
+  if (rosterBackfill.updatedOperators || rosterBackfill.rewiredAssignments) {
+    console.log(
+      `Assignment rosters updated: ${rosterBackfill.updatedOperators} operator records, ${rosterBackfill.rewiredAssignments} assignments.`
+    );
+  }
+  await Operator.createIndexes();
+  await Vehicle.createIndexes();
+  await RunCut.createIndexes();
   await RunCutDay.createIndexes();
   await LoginRateLimitCounter.createIndexes();
   await ReallocationRequest.createIndexes();
   await TeamPost.createIndexes();
+  await EltOutlookSnapshot.createIndexes();
   if (shuttingDown) return;
   httpServer = app.listen(config.port, () => {
     console.log(`Server is running on port ${config.port}`);

@@ -5,7 +5,7 @@ import RunCut from "../models/RunCut.js";
 import { addMonths, monthInTimezone } from "./operationsKpis.js";
 import { queueOperationsRefresh } from "./operationsReporting.js";
 import { projectAssignment } from "./projectAssignment.js";
-import { findOperatorConflict, resolveOperator, resolveVehicle } from "./resolveAssignment.js";
+import { findOperatorConflict, findVehicleConflict, resolveOperator, resolveVehicle } from "./resolveAssignment.js";
 import { todayInTimezone } from "./timezone.js";
 import { runInTransaction } from "./transaction.js";
 import { httpError } from "./httpError.js";
@@ -153,8 +153,11 @@ export const approveOrApplyReallocation = async (requestId, reviewer = null) => 
       throw httpError(409, `Route ${request.destinationRouteCode} changed after this request was submitted. Submit a new request using the current route details.`);
     }
 
-    const operator = await resolveOperator(plan.operatorName);
-    const vehicle = await resolveVehicle(divisionId, plan.targetAssignment.vehicleCode);
+    const operatorDoc = await resolveOperator(divisionId, plan.operatorName);
+    const vehicleDoc = await resolveVehicle(divisionId, plan.targetAssignment.vehicleCode);
+    const operator = operatorDoc?._id || null;
+    const vehicle = vehicleDoc?._id || null;
+    const pulloutAddress = operatorDoc?.pulloutAddress || "";
     const targetStatus = statusAfterReallocation(targetRunCut.status, operator);
     const sourceStatus = movingRoutes ? statusAfterReallocation(sourceRunCut.status, null) : null;
     const conflict = await findOperatorConflict({
@@ -165,6 +168,19 @@ export const approveOrApplyReallocation = async (requestId, reviewer = null) => 
       excludeRunCutIds: [sourceRunCut._id, targetRunCut._id],
     });
     if (conflict) throw httpError(409, conflictMessage(conflict));
+    const vehicleConflict = await findVehicleConflict({
+      vehicle,
+      daysOfWeek: targetRunCut.daysOfWeek,
+      startTime: targetRunCut.startTime,
+      endTime: targetRunCut.endTime,
+      excludeRunCutIds: [sourceRunCut._id, targetRunCut._id],
+    });
+    if (vehicleConflict) {
+      throw httpError(
+        409,
+        `This vehicle is already assigned to route ${vehicleConflict.routeCode} on ${vehicleConflict.days.join(", ")} from ${vehicleConflict.startTime} to ${vehicleConflict.endTime}; that overlaps with this assignment.`
+      );
+    }
 
     const targetChanges = [
       { field: "operator", oldValue: targetRunCut.operator?._id || targetRunCut.operator, newValue: operator },
@@ -173,7 +189,7 @@ export const approveOrApplyReallocation = async (requestId, reviewer = null) => 
       {
         field: "pulloutAddress",
         oldValue: targetRunCut.pulloutAddress,
-        newValue: plan.targetAssignment.pulloutAddress,
+        newValue: pulloutAddress,
       },
     ].filter((change) => String(change.oldValue ?? "") !== String(change.newValue ?? ""));
 
@@ -196,7 +212,7 @@ export const approveOrApplyReallocation = async (requestId, reviewer = null) => 
     applyReallocationAssignment(targetRunCut, {
       operator,
       vehicle,
-      pulloutAddress: plan.targetAssignment.pulloutAddress,
+      pulloutAddress,
     });
     targetRunCut.updatedBy = request.reviewedBy;
     await targetRunCut.save();

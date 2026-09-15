@@ -135,6 +135,8 @@ const runCutDaySchema = new mongoose.Schema(
 
 runCutDaySchema.index({ division: 1, route: 1, date: 1 }, { unique: true });
 runCutDaySchema.index({ division: 1, date: 1 });
+runCutDaySchema.index({ operator: 1, date: 1 });
+runCutDaySchema.index({ vehicle: 1, date: 1 });
 runCutDaySchema.index(
   { date: 1, coveringRoute: 1 },
   {

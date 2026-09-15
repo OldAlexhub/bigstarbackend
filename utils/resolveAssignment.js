@@ -4,27 +4,42 @@ import Route from "../models/Route.js";
 import RunCut from "../models/RunCut.js";
 import RunCutDay from "../models/RunCutDay.js";
 import { normalizeName, normalizeCode, escapeRegex } from "./normalizeText.js";
+import { httpError } from "./httpError.js";
+import mongoose from "mongoose";
 
-// Typing an Operator/Vehicle name/code directly on a route (instead of
-// picking from a pre-built list) finds the existing record with that name
-// (case/whitespace-insensitive, since names get normalized on the way in)
-// or creates it on the spot.
-export const resolveOperator = async (rawName) => {
-  const name = normalizeName(rawName);
-  if (!name) return null;
-  const existing = await Operator.findOne({ name: new RegExp(`^${escapeRegex(name)}$`, "i") });
-  if (existing) return existing._id;
-  const created = await Operator.create({ name });
-  return created._id;
+const WEEK_MINUTES = 7 * 24 * 60;
+const DAY_INDEX = new Map(["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((day, index) => [day, index]));
+
+// Assignments must come from the selected division's active roster. Names
+// are still accepted for older clients and approval workflows, but they are
+// resolved against that same controlled roster and never create records as
+// a side effect of editing a schedule.
+export const resolveOperator = async (division, rawValue) => {
+  if (!rawValue) return null;
+  const query = mongoose.isValidObjectId(rawValue)
+    ? { _id: rawValue, division }
+    : {
+        division,
+        name: new RegExp(`^${escapeRegex(normalizeName(rawValue))}$`, "i"),
+      };
+  const operator = await Operator.findOne(query);
+  if (!operator) throw httpError(400, "Choose a driver from this division's Drivers roster.");
+  if (operator.active === false) throw httpError(400, "That driver is inactive. Choose an active driver.");
+  return operator;
 };
 
-export const resolveVehicle = async (division, rawCode) => {
-  const code = normalizeCode(rawCode);
-  if (!code) return null;
-  const existing = await Vehicle.findOne({ division, code: new RegExp(`^${escapeRegex(code)}$`, "i") });
-  if (existing) return existing._id;
-  const created = await Vehicle.create({ division, code });
-  return created._id;
+export const resolveVehicle = async (division, rawValue) => {
+  if (!rawValue) return null;
+  const query = mongoose.isValidObjectId(rawValue)
+    ? { _id: rawValue, division }
+    : {
+        division,
+        code: new RegExp(`^${escapeRegex(normalizeCode(rawValue))}$`, "i"),
+      };
+  const vehicle = await Vehicle.findOne(query);
+  if (!vehicle) throw httpError(400, "Choose a vehicle from this division's Vehicles roster.");
+  if (vehicle.active === false) throw httpError(400, "That vehicle is inactive. Choose an active vehicle.");
+  return vehicle;
 };
 
 export const resolveRoute = async (division, rawCode) => {
@@ -51,10 +66,62 @@ export const timeRangesOverlap = (aStart, aEnd, bStart, bEnd) => {
   return a1 < b2 && b1 < a2;
 };
 
+const weeklyInterval = (day, startTime, endTime) => {
+  const dayIndex = DAY_INDEX.get(day);
+  if (dayIndex === undefined || !startTime || !endTime) return null;
+  const start = dayIndex * 24 * 60 + toMinutes(startTime);
+  let end = dayIndex * 24 * 60 + toMinutes(endTime);
+  if (end <= start) end += 24 * 60;
+  return { start, end };
+};
+
+export const recurringOverlapDays = (aDays, aStart, aEnd, bDays, bStart, bEnd) => {
+  const overlapping = new Set();
+  for (const aDay of aDays || []) {
+    const a = weeklyInterval(aDay, aStart, aEnd);
+    if (!a) continue;
+    for (const bDay of bDays || []) {
+      const base = weeklyInterval(bDay, bStart, bEnd);
+      if (!base) continue;
+      const collides = [-WEEK_MINUTES, 0, WEEK_MINUTES].some((offset) => {
+        const b = { start: base.start + offset, end: base.end + offset };
+        return a.start < b.end && b.start < a.end;
+      });
+      if (collides) overlapping.add(aDay);
+    }
+  }
+  return [...overlapping];
+};
+
+const datedInterval = (date, startTime, endTime) => {
+  if (!date || !startTime || !endTime) return null;
+  const day = new Date(date);
+  day.setUTCHours(0, 0, 0, 0);
+  const start = day.getTime() + toMinutes(startTime) * 60_000;
+  let end = day.getTime() + toMinutes(endTime) * 60_000;
+  if (end <= start) end += 24 * 60 * 60_000;
+  return { start, end };
+};
+
+const datedRangesOverlap = (aDate, aStart, aEnd, bDate, bStart, bEnd) => {
+  const a = datedInterval(aDate, aStart, aEnd);
+  const b = datedInterval(bDate, bStart, bEnd);
+  return Boolean(a && b && a.start < b.end && b.start < a.end);
+};
+
+const adjacentDateRange = (date) => {
+  const center = new Date(date);
+  center.setUTCHours(0, 0, 0, 0);
+  const from = new Date(center);
+  from.setUTCDate(from.getUTCDate() - 1);
+  const to = new Date(center);
+  to.setUTCDate(to.getUTCDate() + 1);
+  return { from, to };
+};
+
 // A person can't drive two routes at once — reject an assignment that would
-// double-book an operator on an overlapping day and time. Checked across
-// every division (operators are company-wide), not just the one being
-// edited.
+// double-book a driver on an overlapping day and time. The roster record is
+// division-owned, and every route using that record is checked.
 export const findOperatorConflict = async ({ operator, daysOfWeek, startTime, endTime, excludeRunCutId, excludeRunCutIds = [] }) => {
   if (!operator || !daysOfWeek?.length || !startTime || !endTime) return null;
 
@@ -63,12 +130,18 @@ export const findOperatorConflict = async ({ operator, daysOfWeek, startTime, en
   const candidates = await RunCut.find({
     operator,
     ...(excludedIds.length && { _id: { $nin: excludedIds } }),
-    daysOfWeek: { $in: daysOfWeek },
   }).populate("route", "code");
 
   for (const candidate of candidates) {
-    if (timeRangesOverlap(startTime, endTime, candidate.startTime, candidate.endTime)) {
-      const overlapDays = daysOfWeek.filter((d) => candidate.daysOfWeek.includes(d));
+    const overlapDays = recurringOverlapDays(
+      daysOfWeek,
+      startTime,
+      endTime,
+      candidate.daysOfWeek,
+      candidate.startTime,
+      candidate.endTime
+    );
+    if (overlapDays.length) {
       return {
         routeCode: candidate.route?.code,
         days: overlapDays,
@@ -88,14 +161,65 @@ export const findOperatorConflict = async ({ operator, daysOfWeek, startTime, en
 export const findOperatorConflictOnDate = async ({ operator, date, startTime, endTime, excludeRunCutDayId }) => {
   if (!operator || !date || !startTime || !endTime) return null;
 
+  const { from, to } = adjacentDateRange(date);
+
   const candidates = await RunCutDay.find({
     operator,
-    date,
+    date: { $gte: from, $lte: to },
     _id: { $ne: excludeRunCutDayId },
   }).populate("route", "code");
 
   for (const candidate of candidates) {
-    if (timeRangesOverlap(startTime, endTime, candidate.startTime, candidate.endTime)) {
+    if (datedRangesOverlap(date, startTime, endTime, candidate.date, candidate.startTime, candidate.endTime)) {
+      return { routeCode: candidate.route?.code, startTime: candidate.startTime, endTime: candidate.endTime };
+    }
+  }
+  return null;
+};
+
+export const findVehicleConflict = async ({ vehicle, daysOfWeek, startTime, endTime, excludeRunCutId, excludeRunCutIds = [] }) => {
+  if (!vehicle || !daysOfWeek?.length || !startTime || !endTime) return null;
+
+  const excludedIds = [...excludeRunCutIds, ...(excludeRunCutId ? [excludeRunCutId] : [])];
+  const candidates = await RunCut.find({
+    vehicle,
+    ...(excludedIds.length && { _id: { $nin: excludedIds } }),
+  }).populate("route", "code");
+
+  for (const candidate of candidates) {
+    const overlapDays = recurringOverlapDays(
+      daysOfWeek,
+      startTime,
+      endTime,
+      candidate.daysOfWeek,
+      candidate.startTime,
+      candidate.endTime
+    );
+    if (overlapDays.length) {
+      return {
+        routeCode: candidate.route?.code,
+        days: overlapDays,
+        startTime: candidate.startTime,
+        endTime: candidate.endTime,
+      };
+    }
+  }
+  return null;
+};
+
+export const findVehicleConflictOnDate = async ({ vehicle, date, startTime, endTime, excludeRunCutDayId }) => {
+  if (!vehicle || !date || !startTime || !endTime) return null;
+
+  const { from, to } = adjacentDateRange(date);
+
+  const candidates = await RunCutDay.find({
+    vehicle,
+    date: { $gte: from, $lte: to },
+    _id: { $ne: excludeRunCutDayId },
+  }).populate("route", "code");
+
+  for (const candidate of candidates) {
+    if (datedRangesOverlap(date, startTime, endTime, candidate.date, candidate.startTime, candidate.endTime)) {
       return { routeCode: candidate.route?.code, startTime: candidate.startTime, endTime: candidate.endTime };
     }
   }
@@ -117,9 +241,7 @@ export const findVehicleConflictIds = (runCuts) => {
       if (!b.vehicle) continue;
       const sameVehicle = String(a.vehicle._id || a.vehicle) === String(b.vehicle._id || b.vehicle);
       if (!sameVehicle) continue;
-      const sharedDay = (a.daysOfWeek || []).some((d) => (b.daysOfWeek || []).includes(d));
-      if (!sharedDay) continue;
-      if (timeRangesOverlap(a.startTime, a.endTime, b.startTime, b.endTime)) {
+      if (recurringOverlapDays(a.daysOfWeek, a.startTime, a.endTime, b.daysOfWeek, b.startTime, b.endTime).length) {
         conflicting.add(a._id.toString());
         conflicting.add(b._id.toString());
       }

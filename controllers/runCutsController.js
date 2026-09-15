@@ -9,6 +9,7 @@ import {
   resolveOperator,
   resolveVehicle,
   findOperatorConflict,
+  findVehicleConflict,
   findVehicleConflictIds,
 } from "../utils/resolveAssignment.js";
 import { addMonths, monthInTimezone } from "../utils/operationsKpis.js";
@@ -25,8 +26,8 @@ const queueProjectedMonths = (division, timezone) => {
 const populateRunCut = (query) =>
   query
     .populate("route", "code type")
-    .populate("operator", "name")
-    .populate("vehicle", "code")
+    .populate("operator", "name pulloutAddress division active")
+    .populate("vehicle", "code division active")
     .populate("division", "code name");
 
 const excludeStandby = (runCuts, includeStandby) =>
@@ -35,6 +36,10 @@ const excludeStandby = (runCuts, includeStandby) =>
 const conflictMessage = (conflict) =>
   `This operator is already assigned to route ${conflict.routeCode} on ${conflict.days.join(", ")} ` +
   `from ${conflict.startTime} to ${conflict.endTime} — that overlaps with this assignment.`;
+
+const vehicleConflictMessage = (conflict) =>
+  `This vehicle is already assigned to route ${conflict.routeCode} on ${conflict.days.join(", ")} ` +
+  `from ${conflict.startTime} to ${conflict.endTime}; that overlaps with this assignment.`;
 
 // Flags rows whose vehicle is double-booked (same vehicle, overlapping day
 // + time) against another row in the same result set — reusing a vehicle
@@ -64,7 +69,7 @@ export const listRunCuts = async (req, res) => {
 };
 
 export const createRunCut = async (req, res) => {
-  const { division, route, daysOfWeek, operatorName, vehicleCode, pulloutAddress, startTime, endTime, status } =
+  const { division, route, daysOfWeek, operatorId, operatorName, vehicleId, vehicleCode, startTime, endTime, status } =
     req.body;
   if (!canAccessDivision(req.user, division)) {
     return res.status(403).json({ message: "No access to this division" });
@@ -74,8 +79,10 @@ export const createRunCut = async (req, res) => {
   let timezone;
   try {
     await runInTransaction(async () => {
-      const operator = await resolveOperator(operatorName);
-      const vehicle = await resolveVehicle(division, vehicleCode);
+      const operatorDoc = await resolveOperator(division, operatorId ?? operatorName);
+      const vehicleDoc = await resolveVehicle(division, vehicleId ?? vehicleCode);
+      const operator = operatorDoc?._id || null;
+      const vehicle = vehicleDoc?._id || null;
       const conflict = await findOperatorConflict({
         operator,
         daysOfWeek: daysOfWeek || [],
@@ -83,6 +90,13 @@ export const createRunCut = async (req, res) => {
         endTime,
       });
       if (conflict) throw httpError(409, conflictMessage(conflict));
+      const vehicleConflict = await findVehicleConflict({
+        vehicle,
+        daysOfWeek: daysOfWeek || [],
+        startTime,
+        endTime,
+      });
+      if (vehicleConflict) throw httpError(409, vehicleConflictMessage(vehicleConflict));
 
       const divisionDoc = await Division.findById(division);
       const thresholds = await getEffectiveThresholds(divisionDoc);
@@ -100,7 +114,7 @@ export const createRunCut = async (req, res) => {
         daysOfWeek: daysOfWeek || [],
         operator,
         vehicle,
-        pulloutAddress,
+        pulloutAddress: operatorDoc?.pulloutAddress || "",
         startTime,
         endTime,
         status: resolvedStatus,
@@ -135,12 +149,25 @@ export const updateRunCut = async (req, res) => {
       }
 
       const body = { ...req.body };
-      if (body.operatorName !== undefined) {
-        body.operator = await resolveOperator(body.operatorName);
+      const operatorWasUpdated = body.operatorId !== undefined || body.operatorName !== undefined;
+      if (operatorWasUpdated) {
+        const operatorDoc = await resolveOperator(
+          runCut.division,
+          body.operatorId !== undefined ? body.operatorId : body.operatorName
+        );
+        body.operator = operatorDoc?._id || null;
+        body.pulloutAddress = operatorDoc?.pulloutAddress || "";
+        delete body.operatorId;
         delete body.operatorName;
       }
-      if (body.vehicleCode !== undefined) {
-        body.vehicle = await resolveVehicle(runCut.division, body.vehicleCode);
+      if (!operatorWasUpdated) delete body.pulloutAddress;
+      if (body.vehicleId !== undefined || body.vehicleCode !== undefined) {
+        const vehicleDoc = await resolveVehicle(
+          runCut.division,
+          body.vehicleId !== undefined ? body.vehicleId : body.vehicleCode
+        );
+        body.vehicle = vehicleDoc?._id || null;
+        delete body.vehicleId;
         delete body.vehicleCode;
       }
 
@@ -179,6 +206,14 @@ export const updateRunCut = async (req, res) => {
         excludeRunCutId: runCut._id,
       });
       if (conflict) throw httpError(409, conflictMessage(conflict));
+      const vehicleConflict = await findVehicleConflict({
+        vehicle: runCut.vehicle,
+        daysOfWeek: runCut.daysOfWeek,
+        startTime: runCut.startTime,
+        endTime: runCut.endTime,
+        excludeRunCutId: runCut._id,
+      });
+      if (vehicleConflict) throw httpError(409, vehicleConflictMessage(vehicleConflict));
 
       const divisionDoc = await Division.findById(runCut.division);
       const thresholds = await getEffectiveThresholds(divisionDoc);

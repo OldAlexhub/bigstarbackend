@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { normalizeCode } from "../utils/normalizeText.js";
 
 const vehicleSchema = new mongoose.Schema(
   {
@@ -6,6 +7,7 @@ const vehicleSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+      set: normalizeCode,
     },
     division: {
       type: mongoose.Schema.Types.ObjectId,

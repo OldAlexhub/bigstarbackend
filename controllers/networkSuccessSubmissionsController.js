@@ -73,7 +73,7 @@ const buildEnrichmentContext = async (division, rows) => {
       .populate({ path: "operator", select: "name employeeId provider", populate: { path: "provider", select: "name" } })
       .lean(),
     DailyIssueLog.find({ division, route: { $in: routeIds }, date: { $in: dateValues } }).lean(),
-    Operator.find({ active: true }).populate("provider", "name").lean(),
+    Operator.find({ division, active: true }).populate("provider", "name").lean(),
     RunCut.find({ division, route: { $in: routeIds } })
       .populate({ path: "operator", select: "name employeeId provider", populate: { path: "provider", select: "name" } })
       .lean(),
@@ -752,6 +752,12 @@ export const updatePerformanceAssignment = async (req, res) => {
     requestedProviderId ? Provider.findById(requestedProviderId) : null,
   ]);
   if (operatorId && !operator) return res.status(400).json({ message: "Selected operator was not found." });
+  if (operator && String(operator.division) !== String(entry.division)) {
+    return res.status(400).json({ message: "Choose a driver from this division's Drivers roster." });
+  }
+  if (operator?.active === false) {
+    return res.status(400).json({ message: "That driver is inactive. Choose an active driver." });
+  }
   if (requestedProviderId && !provider) return res.status(400).json({ message: "Selected provider was not found." });
   const resolvedProvider = provider || (!Object.prototype.hasOwnProperty.call(req.body, "providerId") ? operator?.provider : null);
   const after = {
@@ -778,6 +784,7 @@ export const updatePerformanceAssignment = async (req, res) => {
           provider: id(operator?.provider),
         };
         runCut.operator = operator?._id || null;
+        runCut.pulloutAddress = operator?.pulloutAddress || "";
         runCut.updatedBy = req.user._id;
         if (operator && Object.prototype.hasOwnProperty.call(req.body, "providerId")) {
           operator.provider = resolvedProvider?._id || null;

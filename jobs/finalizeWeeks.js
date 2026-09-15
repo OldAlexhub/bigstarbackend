@@ -3,6 +3,7 @@ import RunCutDay from "../models/RunCutDay.js";
 import WeeklyDivisionSummary from "../models/WeeklyDivisionSummary.js";
 import { addDays, startOfWeek, emptyMetrics, accumulate, coveragePct } from "../utils/weeklyMetrics.js";
 import { todayInTimezone } from "../utils/timezone.js";
+import { createEltOutlookSnapshots } from "../services/eltOutlookService.js";
 
 const computeWeekSummary = async (divisionId, weekStart) => {
   const weekEnd = addDays(weekStart, 6);
@@ -56,6 +57,23 @@ export const finalizePastWeeks = async () => {
 
       cursor = addDays(cursor, 7);
     }
+  }
+
+  // Create one official, immutable outlook record for the most recently
+  // closed week only. This intentionally does not backfill historical
+  // forecasts: a forecast is recorded only when its source week actually
+  // reaches the normal operational finalization path.
+  const companyWeekStart = startOfWeek(todayInTimezone("America/New_York"));
+  const snapshotWeek = addDays(companyWeekStart, -7);
+  const dataCutoff = addDays(companyWeekStart, -1);
+  const finalized = await WeeklyDivisionSummary.find({
+    weekStart: snapshotWeek,
+    finalized: true,
+    division: { $in: divisions.map((division) => division._id) },
+  }).select("division").lean();
+  const finalizedDivisionIds = finalized.map((summary) => summary.division);
+  if (finalizedDivisionIds.length) {
+    await createEltOutlookSnapshots({ snapshotWeek, dataCutoff, divisionIds: finalizedDivisionIds });
   }
 };
 

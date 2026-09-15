@@ -25,6 +25,7 @@ import {
   resolveOperator,
   resolveVehicle,
   findOperatorConflictOnDate,
+  findVehicleConflictOnDate,
 } from "../utils/resolveAssignment.js";
 
 const isoDate = (date) => new Date(date).toISOString().slice(0, 10);
@@ -33,13 +34,17 @@ const populateRunCutDay = (query) =>
   query
     .populate("division", "code name")
     .populate("route", "code type")
-    .populate("operator", "name")
-    .populate("vehicle", "code")
+    .populate("operator", "name pulloutAddress division active")
+    .populate("vehicle", "code division active")
     .populate("coveringRoute", "code division");
 
 const conflictMessage = (conflict) =>
   `This operator is already on route ${conflict.routeCode} from ${conflict.startTime} to ${conflict.endTime} ` +
   `that day — that overlaps with this duty.`;
+
+const vehicleConflictMessage = (conflict) =>
+  `This vehicle is already on route ${conflict.routeCode} from ${conflict.startTime} to ${conflict.endTime} ` +
+  "that day; that overlaps with this duty.";
 
 const dayOffset = (date, timezone) => {
   const target = new Date(date);
@@ -276,9 +281,10 @@ export const updateRunCutDayException = async (req, res) => {
   }
 
   const {
+    operatorId,
     operatorName,
+    vehicleId,
     vehicleCode,
-    pulloutAddress,
     startTime,
     endTime,
     status,
@@ -288,7 +294,7 @@ export const updateRunCutDayException = async (req, res) => {
     disposition,
   } = req.body;
   const divisionDoc = await Division.findById(runCutDay.division);
-  const assignmentWasUpdated = [operatorName, vehicleCode, pulloutAddress, startTime, endTime].some(
+  const assignmentWasUpdated = [operatorId, operatorName, vehicleId, vehicleCode, startTime, endTime].some(
     (value) => value !== undefined
   );
   try {
@@ -302,20 +308,35 @@ export const updateRunCutDayException = async (req, res) => {
 
   const changeDescriptions = [];
   let statusWasUpdated = false;
-  if (operatorName !== undefined) {
-    runCutDay.operator = await resolveOperator(operatorName);
+  if (operatorId !== undefined || operatorName !== undefined) {
+    let operatorDoc;
+    try {
+      operatorDoc = await resolveOperator(
+        runCutDay.division,
+        operatorId !== undefined ? operatorId : operatorName
+      );
+    } catch (error) {
+      return respondToHttpError(error, res);
+    }
+    runCutDay.operator = operatorDoc?._id || null;
+    runCutDay.pulloutAddress = operatorDoc?.pulloutAddress || "";
     runCutDay.overrides.operator = true;
-    changeDescriptions.push(`operator to ${operatorName || "unassigned"}`);
-  }
-  if (vehicleCode !== undefined) {
-    runCutDay.vehicle = await resolveVehicle(runCutDay.division, vehicleCode);
-    runCutDay.overrides.vehicle = true;
-    changeDescriptions.push(`vehicle to ${vehicleCode || "unassigned"}`);
-  }
-  if (pulloutAddress !== undefined) {
-    runCutDay.pulloutAddress = pulloutAddress;
     runCutDay.overrides.pulloutAddress = true;
-    changeDescriptions.push("pullout address");
+    changeDescriptions.push(`operator to ${operatorDoc?.name || "unassigned"}`);
+  }
+  if (vehicleId !== undefined || vehicleCode !== undefined) {
+    let vehicleDoc;
+    try {
+      vehicleDoc = await resolveVehicle(
+        runCutDay.division,
+        vehicleId !== undefined ? vehicleId : vehicleCode
+      );
+    } catch (error) {
+      return respondToHttpError(error, res);
+    }
+    runCutDay.vehicle = vehicleDoc?._id || null;
+    runCutDay.overrides.vehicle = true;
+    changeDescriptions.push(`vehicle to ${vehicleDoc?.code || "unassigned"}`);
   }
   if (startTime !== undefined) {
     runCutDay.startTime = startTime || null;
@@ -395,6 +416,14 @@ export const updateRunCutDayException = async (req, res) => {
       excludeRunCutDayId: runCutDay._id,
     });
     if (conflict) return res.status(409).json({ message: conflictMessage(conflict) });
+    const vehicleConflict = await findVehicleConflictOnDate({
+      vehicle: runCutDay.vehicle,
+      date: runCutDay.date,
+      startTime: runCutDay.startTime,
+      endTime: runCutDay.endTime,
+      excludeRunCutDayId: runCutDay._id,
+    });
+    if (vehicleConflict) return res.status(409).json({ message: vehicleConflictMessage(vehicleConflict) });
   }
 
   if (statusWasUpdated || startTime !== undefined || endTime !== undefined) {
@@ -441,7 +470,7 @@ export const updateRunCutDayException = async (req, res) => {
 // its normal schedule — a one-off, not a change to the ongoing plan. The
 // route must come from that division's active route pool.
 export const createExtraRunCutDay = async (req, res) => {
-  const { division, date, routeId, operatorName, vehicleCode, pulloutAddress, startTime, endTime, notes } =
+  const { division, date, routeId, operatorId, operatorName, vehicleId, vehicleCode, startTime, endTime, notes } =
     req.body;
   if (!canAccessDivision(req.user, division)) {
     return res.status(403).json({ message: "No access to this division" });
@@ -467,10 +496,14 @@ export const createExtraRunCutDay = async (req, res) => {
       });
       if (!route) throw httpError(400, "Choose an active revenue route from this division.");
 
-      const operator = await resolveOperator(operatorName);
-      const vehicle = await resolveVehicle(division, vehicleCode);
+      const operatorDoc = await resolveOperator(division, operatorId ?? operatorName);
+      const vehicleDoc = await resolveVehicle(division, vehicleId ?? vehicleCode);
+      const operator = operatorDoc?._id || null;
+      const vehicle = vehicleDoc?._id || null;
       const conflict = await findOperatorConflictOnDate({ operator, date: dayDate, startTime, endTime });
       if (conflict) throw httpError(409, conflictMessage(conflict));
+      const vehicleConflict = await findVehicleConflictOnDate({ vehicle, date: dayDate, startTime, endTime });
+      if (vehicleConflict) throw httpError(409, vehicleConflictMessage(vehicleConflict));
 
       const thresholds = await getEffectiveThresholds(divisionDoc);
       const { serviceHours, revenueHours } = computeHours({
@@ -486,7 +519,7 @@ export const createExtraRunCutDay = async (req, res) => {
         date: dayDate,
         operator,
         vehicle,
-        pulloutAddress,
+        pulloutAddress: operatorDoc?.pulloutAddress || "",
         startTime,
         endTime,
         status: "add_rte",
@@ -518,7 +551,7 @@ export const createExtraRunCutDay = async (req, res) => {
     division,
     user: req.user,
     action: "runcutday.extra_added",
-    summary: `Added extra run for ${route.code} on ${isoDate(dayDate)}${operatorName ? ` (operator: ${operatorName})` : ""}`,
+    summary: `Added extra run for ${route.code} on ${isoDate(dayDate)}${operatorName || operatorId ? ` (driver assigned)` : ""}`,
   });
 
   const populated = await populateRunCutDay(RunCutDay.findById(runCutDay._id));

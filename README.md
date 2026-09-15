@@ -40,12 +40,13 @@ The client development configuration expects the API at `http://localhost:3001`.
 
 ```powershell
 npm test
+npm run migrate:assignment-rosters
 npm run migrate:daily-issue-dedup
 npm run maintenance:create-admin
 npm run maintenance:verify-production
 ```
 
-Run the daily-issue migration only when upgrading data created before the unique daily-issue identity constraint. It is safe to rerun and keeps the preferred issue record when duplicates exist.
+The assignment-roster migration is safe to rerun. It seeds division-owned Drivers rosters from existing Master Run Cuts and rewires legacy company-wide driver references; startup also performs this idempotent backfill before accepting traffic. Run the daily-issue migration only when upgrading data created before the unique daily-issue identity constraint.
 
 Run the production preflight against the target database before deployment. It is read-only and verifies transaction support plus the absence of duplicate deployed standby coverage that would prevent the protective unique index from being installed.
 

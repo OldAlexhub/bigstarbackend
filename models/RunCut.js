@@ -80,6 +80,8 @@ const runCutSchema = new mongoose.Schema(
 );
 
 runCutSchema.index({ division: 1, route: 1 }, { unique: true });
+runCutSchema.index({ operator: 1 });
+runCutSchema.index({ vehicle: 1 });
 
 const RunCut = mongoose.model("RunCut", runCutSchema);
 

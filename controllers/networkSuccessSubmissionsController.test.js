@@ -38,7 +38,15 @@ test("reusable Network Success corrections update Master Run Cuts and the operat
     assignmentAudit: [],
     async save() {},
   };
-  const operator = { _id: "operator-1", name: "Correct Operator", provider: null, async save() {} };
+  const operator = {
+    _id: "operator-1",
+    name: "Correct Operator",
+    division: "division-1",
+    pulloutAddress: "100 Depot Way",
+    provider: null,
+    active: true,
+    async save() {},
+  };
   const runCut = { operator: null, async save() {} };
   NetworkKpiEntry.findById = async () => entry;
   Operator.findById = () => ({ populate: async () => operator });
@@ -55,6 +63,7 @@ test("reusable Network Success corrections update Master Run Cuts and the operat
       res
     );
     assert.equal(String(runCut.operator), "operator-1");
+    assert.equal(runCut.pulloutAddress, "100 Depot Way");
     assert.equal(String(operator.provider), "provider-1");
     assert.equal(entry.assignmentOverride, null);
     assert.equal(entry.assignmentAudit[0].scope, "master_run_cuts");
@@ -81,7 +90,13 @@ test("Network Success assignment corrections are stored separately and audited",
     async save() {},
   };
   NetworkKpiEntry.findById = async () => entry;
-  Operator.findById = () => ({ populate: async () => ({ _id: "operator-1", name: "Correct Operator", provider: null }) });
+  Operator.findById = () => ({ populate: async () => ({
+    _id: "operator-1",
+    name: "Correct Operator",
+    division: "division-1",
+    provider: null,
+    active: true,
+  }) });
   Provider.findById = async () => ({ _id: "provider-1", name: "Correct Provider" });
   try {
     const res = response();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requireSection } from "./access.js";
+import { requireELT, requireSection } from "./access.js";
 
 const response = () => ({
   statusCode: 200,
@@ -22,4 +22,15 @@ test("Network Success is assignable while ELT retains automatic access", () => {
   const denied = response();
   gate({ user: { role: "Coordinator", sections: [] } }, denied, () => {});
   assert.equal(denied.statusCode, 403);
+});
+
+test("Company Outlook remains ELT-only", () => {
+  let allowed = false;
+  requireELT({ user: { role: "ELT" } }, response(), () => { allowed = true; });
+  assert.equal(allowed, true);
+
+  const denied = response();
+  requireELT({ user: { role: "manager" } }, denied, () => {});
+  assert.equal(denied.statusCode, 403);
+  assert.equal(denied.body.message, "ELT access required");
 });

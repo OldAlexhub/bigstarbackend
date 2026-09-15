@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { normalizeName } from "../utils/normalizeText.js";
 
 const operatorSchema = new mongoose.Schema(
   {
@@ -6,6 +7,18 @@ const operatorSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+      set: normalizeName,
+    },
+    division: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Division",
+      required: true,
+    },
+    pulloutAddress: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: 300,
     },
     employeeId: {
       type: String,
@@ -23,6 +36,15 @@ const operatorSchema = new mongoose.Schema(
     },
   },
   { timestamps: true }
+);
+
+operatorSchema.index(
+  { division: 1, name: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { division: { $type: "objectId" } },
+    name: "one_operator_name_per_division",
+  }
 );
 
 const Operator = mongoose.model("Operator", operatorSchema);
