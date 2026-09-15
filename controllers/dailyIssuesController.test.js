@@ -163,7 +163,9 @@ test("OSR-only reporting filters the exported issue rows", async () => {
       response
     );
 
-    assert.equal(receivedFilter.disruptionType, "OSR (Out of Service Request)");
+    assert.deepEqual(receivedFilter.disruptionType, {
+      $in: ["OSR (Orion Service Request)", "OSR (Out of Service Request)"],
+    });
     assert.match(response.headers["Content-Disposition"], /D1-osrs-2026-09-01-to-2026-09-09\.csv/);
   } finally {
     Division.findById = originalFindById;

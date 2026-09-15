@@ -1,6 +1,8 @@
 export const DAYS_OF_WEEK = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
 export const RUN_CUT_STATUSES = ["active", "unassigned", "suspended", "off", "add_rte"];
+export const NON_OPERATING_RUN_CUT_STATUSES = ["unassigned", "suspended", "off"];
+export const isOperatingAssignmentStatus = (status) => !NON_OPERATING_RUN_CUT_STATUSES.includes(status);
 
 const round2 = (n) => Math.round(n * 100) / 100;
 

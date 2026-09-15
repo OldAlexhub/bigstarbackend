@@ -11,7 +11,6 @@ import RunCutDay from "./models/RunCutDay.js";
 import LoginRateLimitCounter from "./models/LoginRateLimitCounter.js";
 import ReallocationRequest from "./models/ReallocationRequest.js";
 import TeamPost from "./models/TeamPost.js";
-import EltOutlookSnapshot from "./models/EltOutlookSnapshot.js";
 import Operator from "./models/Operator.js";
 import Vehicle from "./models/Vehicle.js";
 import RunCut from "./models/RunCut.js";
@@ -154,7 +153,6 @@ const start = async () => {
   await LoginRateLimitCounter.createIndexes();
   await ReallocationRequest.createIndexes();
   await TeamPost.createIndexes();
-  await EltOutlookSnapshot.createIndexes();
   if (shuttingDown) return;
   httpServer = app.listen(config.port, () => {
     console.log(`Server is running on port ${config.port}`);

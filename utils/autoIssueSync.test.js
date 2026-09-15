@@ -3,6 +3,7 @@ import test from "node:test";
 import mongoose from "mongoose";
 import DailyIssueLog from "../models/DailyIssueLog.js";
 import { syncAutoIssuesBulk } from "./autoIssueSync.js";
+import { OSR_DISRUPTION_TYPE } from "./disruptionTypes.js";
 
 const installModelStubs = ({ manualIssues = [], bulkWrite }) => {
   const originalFind = DailyIssueLog.find;
@@ -214,6 +215,25 @@ test("auto-sync does not retry a non-duplicate database failure", async () => {
       /database unavailable/
     );
     assert.equal(calls, 1);
+  } finally {
+    stubs.restore();
+  }
+});
+
+test("an active Orion Service Request still synchronizes its OSR issue without a suspension issue", async () => {
+  let operations;
+  const stubs = installModelStubs({
+    bulkWrite: async (received) => { operations = received; },
+  });
+  try {
+    await syncAutoIssuesBulk([
+      runCutDay({ status: "active", disruptionType: OSR_DISRUPTION_TYPE, disruptionNotes: "Adjusted service plan" }),
+    ], new mongoose.Types.ObjectId());
+
+    const updates = operations.filter((operation) => operation.updateOne);
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].updateOne.update.$set.disruptionType, OSR_DISRUPTION_TYPE);
+    assert.equal(updates[0].updateOne.update.$set.notes, "Adjusted service plan");
   } finally {
     stubs.restore();
   }

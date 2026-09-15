@@ -165,6 +165,7 @@ export const approveOrApplyReallocation = async (requestId, reviewer = null) => 
       daysOfWeek: targetRunCut.daysOfWeek,
       startTime: targetRunCut.startTime,
       endTime: targetRunCut.endTime,
+      status: targetStatus,
       excludeRunCutIds: [sourceRunCut._id, targetRunCut._id],
     });
     if (conflict) throw httpError(409, conflictMessage(conflict));
@@ -173,6 +174,7 @@ export const approveOrApplyReallocation = async (requestId, reviewer = null) => 
       daysOfWeek: targetRunCut.daysOfWeek,
       startTime: targetRunCut.startTime,
       endTime: targetRunCut.endTime,
+      status: targetStatus,
       excludeRunCutIds: [sourceRunCut._id, targetRunCut._id],
     });
     if (vehicleConflict) {

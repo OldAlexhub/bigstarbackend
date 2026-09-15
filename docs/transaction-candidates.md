@@ -9,7 +9,7 @@ The production-readiness cleanup made the critical multi-document state transiti
 - Scheduled assignment rollover projects each run cut in its own transaction so one route cannot be left partially projected without creating one very large cross-division transaction.
 - Route retirement removes future generated issues and run-cut days, clears standby dispositions, removes the current run cut, and retires the route atomically.
 - Network Success confirmation and removal update submissions, KPI entries, aliases, and audit data atomically. Reopening and reusable performance assignments also protect their related writes.
-- Deployment exception updates include the selected daily assignment/status/disruption and generated issues in one transaction. OSRs suspend only their selected service date and are limited by the company OSR advance-days setting.
+- Deployment exception updates include the selected daily assignment/status/disruption and generated issues in one transaction. Orion Service Requests use the company OSR advance-days setting and change route status only when explicitly requested.
 
 Activity-log writes and reporting refresh queues intentionally run after commit. They are derived, retryable side effects and must not cause an already-committed operational change to appear failed to the user.
 

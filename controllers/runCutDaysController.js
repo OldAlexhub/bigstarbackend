@@ -6,7 +6,8 @@ import { canAccessDivision } from "../middleware/access.js";
 import { computeHours } from "../utils/hours.js";
 import { getEffectiveThresholds } from "../utils/thresholds.js";
 import { syncAutoIssuesBulk } from "../utils/autoIssueSync.js";
-import { OSR_DISRUPTION_TYPE } from "../utils/disruptionTypes.js";
+import { isOsrDisruptionType } from "../utils/disruptionTypes.js";
+import { exceptionPlanningWindowError, exceptionStatus } from "../utils/runCutDayExceptionPolicy.js";
 import {
   activateRouteWithStandbyCoverage,
   CLOSED_SUSPENDED_DISPOSITION,
@@ -60,16 +61,13 @@ const requireTodayOrTomorrow = (date, division) => {
   }
 };
 
-const requireOsrWindow = async (date, division) => {
-  const settings = await Settings.getSingleton();
-  const maxDays = settings.osrAdvanceDays ?? 7;
+const requireExceptionWindow = async ({ date, division, assignmentWasUpdated, disruptionType }) => {
+  const isOsr = isOsrDisruptionType(disruptionType);
+  const settings = isOsr ? await Settings.getSingleton() : null;
+  const maxDays = settings?.osrAdvanceDays ?? 7;
   const offset = dayOffset(date, division?.timezone);
-  if (offset < 0 || offset > maxDays) {
-    throw httpError(
-      400,
-      `OSRs can only be processed from today through ${maxDays} day${maxDays === 1 ? "" : "s"} ahead.`
-    );
-  }
+  const message = exceptionPlanningWindowError({ offset, assignmentWasUpdated, disruptionType, osrAdvanceDays: maxDays });
+  if (message) throw httpError(400, message);
 };
 
 export const listRunCutDays = async (req, res) => {
@@ -271,8 +269,9 @@ export const setRunCutDayDeployed = async (req, res) => {
 // date and are protected from the next
 // projectAssignment run (server/utils/projectAssignment.js), which leaves
 // an overridden field alone instead of replacing it with whatever the
-// persistent RunCut assignment says. Assignment fields are accepted only
-// for today/tomorrow and never write back to the persistent RunCut.
+// persistent RunCut assignment says. Ordinary assignment fields are
+// accepted only for today/tomorrow; an Orion Service Request may use the
+// configured OSR window. Neither path writes back to the persistent RunCut.
 export const updateRunCutDayException = async (req, res) => {
   const runCutDay = await RunCutDay.findById(req.params.id).populate("route", "code type");
   if (!runCutDay) return res.status(404).json({ message: "Run cut day not found" });
@@ -297,11 +296,14 @@ export const updateRunCutDayException = async (req, res) => {
   const assignmentWasUpdated = [operatorId, operatorName, vehicleId, vehicleCode, startTime, endTime].some(
     (value) => value !== undefined
   );
+  const conflictRelevantUpdate = assignmentWasUpdated || status !== undefined;
   try {
-    if (assignmentWasUpdated) requireTodayOrTomorrow(runCutDay.date, divisionDoc);
-    if (disruptionType === OSR_DISRUPTION_TYPE) {
-      await requireOsrWindow(runCutDay.date, divisionDoc);
-    }
+    await requireExceptionWindow({
+      date: runCutDay.date,
+      division: divisionDoc,
+      assignmentWasUpdated,
+      disruptionType,
+    });
   } catch (error) {
     return respondToHttpError(error, res);
   }
@@ -349,7 +351,7 @@ export const updateRunCutDayException = async (req, res) => {
     changeDescriptions.push(`end time to ${endTime || "not set"}`);
   }
   if (status !== undefined) {
-    runCutDay.status = status;
+    runCutDay.status = exceptionStatus({ currentStatus: runCutDay.status, requestedStatus: status });
     runCutDay.overrides.status = true;
     statusWasUpdated = true;
     changeDescriptions.push(`status to ${status}`);
@@ -369,13 +371,6 @@ export const updateRunCutDayException = async (req, res) => {
     if (disruptionNotes !== undefined) runCutDay.disruptionNotes = disruptionNotes;
     runCutDay.overrides.disruption = true;
     changeDescriptions.push(`disruption to ${disruptionType ?? runCutDay.disruptionType ?? "—"}`);
-  }
-  if (disruptionType === OSR_DISRUPTION_TYPE) {
-    runCutDay.status = "suspended";
-    runCutDay.overrides.status = true;
-    statusWasUpdated = true;
-    syncDispositionWithStatus(runCutDay, "suspended");
-    changeDescriptions.push("status to suspended for this service date");
   }
   if (disposition !== undefined) {
     if (disposition !== null && !DISPOSITION_TYPES.includes(disposition)) {
@@ -407,12 +402,13 @@ export const updateRunCutDayException = async (req, res) => {
     changeDescriptions.push(`disposition to ${disposition || "not dispositioned"}`);
   }
 
-  if (assignmentWasUpdated) {
+  if (conflictRelevantUpdate) {
     const conflict = await findOperatorConflictOnDate({
       operator: runCutDay.operator,
       date: runCutDay.date,
       startTime: runCutDay.startTime,
       endTime: runCutDay.endTime,
+      status: runCutDay.status,
       excludeRunCutDayId: runCutDay._id,
     });
     if (conflict) return res.status(409).json({ message: conflictMessage(conflict) });
@@ -421,6 +417,7 @@ export const updateRunCutDayException = async (req, res) => {
       date: runCutDay.date,
       startTime: runCutDay.startTime,
       endTime: runCutDay.endTime,
+      status: runCutDay.status,
       excludeRunCutDayId: runCutDay._id,
     });
     if (vehicleConflict) return res.status(409).json({ message: vehicleConflictMessage(vehicleConflict) });
@@ -500,9 +497,9 @@ export const createExtraRunCutDay = async (req, res) => {
       const vehicleDoc = await resolveVehicle(division, vehicleId ?? vehicleCode);
       const operator = operatorDoc?._id || null;
       const vehicle = vehicleDoc?._id || null;
-      const conflict = await findOperatorConflictOnDate({ operator, date: dayDate, startTime, endTime });
+      const conflict = await findOperatorConflictOnDate({ operator, date: dayDate, startTime, endTime, status: "add_rte" });
       if (conflict) throw httpError(409, conflictMessage(conflict));
-      const vehicleConflict = await findVehicleConflictOnDate({ vehicle, date: dayDate, startTime, endTime });
+      const vehicleConflict = await findVehicleConflictOnDate({ vehicle, date: dayDate, startTime, endTime, status: "add_rte" });
       if (vehicleConflict) throw httpError(409, vehicleConflictMessage(vehicleConflict));
 
       const thresholds = await getEffectiveThresholds(divisionDoc);

@@ -83,11 +83,13 @@ export const createRunCut = async (req, res) => {
       const vehicleDoc = await resolveVehicle(division, vehicleId ?? vehicleCode);
       const operator = operatorDoc?._id || null;
       const vehicle = vehicleDoc?._id || null;
+      const resolvedStatus = status || "active";
       const conflict = await findOperatorConflict({
         operator,
         daysOfWeek: daysOfWeek || [],
         startTime,
         endTime,
+        status: resolvedStatus,
       });
       if (conflict) throw httpError(409, conflictMessage(conflict));
       const vehicleConflict = await findVehicleConflict({
@@ -95,12 +97,12 @@ export const createRunCut = async (req, res) => {
         daysOfWeek: daysOfWeek || [],
         startTime,
         endTime,
+        status: resolvedStatus,
       });
       if (vehicleConflict) throw httpError(409, vehicleConflictMessage(vehicleConflict));
 
       const divisionDoc = await Division.findById(division);
       const thresholds = await getEffectiveThresholds(divisionDoc);
-      const resolvedStatus = status || "active";
       const { serviceHours, revenueHours } = computeHours({
         startTime,
         endTime,
@@ -203,6 +205,7 @@ export const updateRunCut = async (req, res) => {
         daysOfWeek: runCut.daysOfWeek,
         startTime: runCut.startTime,
         endTime: runCut.endTime,
+        status: runCut.status,
         excludeRunCutId: runCut._id,
       });
       if (conflict) throw httpError(409, conflictMessage(conflict));
@@ -211,6 +214,7 @@ export const updateRunCut = async (req, res) => {
         daysOfWeek: runCut.daysOfWeek,
         startTime: runCut.startTime,
         endTime: runCut.endTime,
+        status: runCut.status,
         excludeRunCutId: runCut._id,
       });
       if (vehicleConflict) throw httpError(409, vehicleConflictMessage(vehicleConflict));
@@ -259,7 +263,7 @@ export const updateRunCut = async (req, res) => {
   // and sent back alongside the edited row so the client can patch every
   // affected row's flag in place instead of reloading the whole division's
   // list (the previous full-reload was the visible "refresh" on every edit).
-  const divisionRunCuts = await RunCut.find({ division }, "vehicle daysOfWeek startTime endTime");
+  const divisionRunCuts = await RunCut.find({ division }, "vehicle daysOfWeek startTime endTime status");
   const conflictIds = findVehicleConflictIds(divisionRunCuts);
   const vehicleConflicts = Object.fromEntries(
     divisionRunCuts.map((rc) => [rc._id.toString(), conflictIds.has(rc._id.toString())])
