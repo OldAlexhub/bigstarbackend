@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import XLSX from "xlsx";
 import ReallocationRequest from "../models/ReallocationRequest.js";
 import RunCut from "../models/RunCut.js";
 import Division from "../models/Division.js";
@@ -14,6 +15,72 @@ const populateRequest = (query) =>
     .populate("reviewedBy", "name username");
 
 const clean = (value) => String(value || "").trim();
+
+const exportPerson = (request, kind) => {
+  const populated = request[`${kind}By`];
+  const name = populated?.name || request[`${kind}ByName`] || "";
+  const username = populated?.username || request[`${kind}ByUsername`] || "";
+  if (name && username) return `${name} (${username})`;
+  return name || username || "";
+};
+
+const exportStatus = (status) => ({
+  pending: "Pending Deployment",
+  approved: "Approved - Scheduled",
+  applied: "Applied",
+}[status] || status || "");
+
+const EXPORT_HEADERS = [
+  "Division",
+  "Submitted",
+  "Current Route",
+  "Destination Route",
+  "Original Operator",
+  "Original Vehicle",
+  "Original Pullout Address",
+  "Requested Operator",
+  "Requested Vehicle",
+  "Requested Pullout Address",
+  "Effective Date",
+  "Status",
+  "Submitted By",
+  "Accepted By",
+  "Reviewed At",
+  "Applied At",
+  "Application Error",
+];
+
+const requestExportRow = (request, excel = false) => {
+  const dateValue = (value, dateOnly = false) => {
+    if (!value) return "";
+    if (excel) return new Date(value);
+    return dateOnly ? String(value).slice(0, 10) : new Date(value).toISOString();
+  };
+  return [
+    request.division?.name || request.division?.code || "",
+    dateValue(request.createdAt),
+    request.routeCode || "",
+    request.destinationRouteCode || "",
+    request.originalOperatorName || "",
+    request.originalVehicleCode || "",
+    request.originalPulloutAddress || "",
+    request.requestedOperatorName || "",
+    request.requestedVehicleCode || "",
+    request.requestedPulloutAddress || "",
+    dateValue(request.effectiveDate, true),
+    exportStatus(request.status),
+    exportPerson(request, "requested"),
+    exportPerson(request, "reviewed"),
+    dateValue(request.reviewedAt),
+    dateValue(request.appliedAt),
+    request.applicationError || "",
+  ];
+};
+
+const escapeCsv = (value) => {
+  const str = String(value ?? "");
+  return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+};
 
 const countsByDivision = (requests) => requests.reduce((counts, request) => {
   const key = String(request.division);
@@ -47,6 +114,57 @@ export const listReallocationRequests = async (req, res) => {
     ReallocationRequest.countDocuments({ division, status: "pending" }),
   ]);
   res.json({ requests: requests.map((request) => requestForUser(request, req.user)), pendingCount });
+};
+
+export const exportReallocationRequests = async (req, res) => {
+  const { division } = req.query;
+  if (!mongoose.isValidObjectId(division)) {
+    return res.status(400).json({ message: "Choose a division." });
+  }
+  if (!canAccessDivision(req.user, division)) {
+    return res.status(403).json({ message: "No access to this division" });
+  }
+
+  const divisionDoc = await Division.findById(division).select("code name").lean();
+  if (!divisionDoc) return res.status(404).json({ message: "Division not found." });
+
+  const requests = await populateRequest(
+    ReallocationRequest.find({ division }).sort({ createdAt: -1 })
+  );
+  const format = req.query.format === "xlsx" ? "xlsx" : "csv";
+  const safeDivision = String(divisionDoc.code || divisionDoc.name || "division")
+    .replace(/[^a-z0-9_-]+/gi, "-")
+    .replace(/^-+|-+$/g, "") || "division";
+  const filenameBase = `${safeDivision}-reallocation-request-history`;
+
+  if (format === "xlsx") {
+    const rows = requests.map((request) => requestExportRow(request, true));
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.aoa_to_sheet([EXPORT_HEADERS, ...rows], { cellDates: true });
+    worksheet["!cols"] = [
+      { wch: 22 }, { wch: 20 }, { wch: 14 }, { wch: 18 }, { wch: 24 }, { wch: 16 },
+      { wch: 32 }, { wch: 24 }, { wch: 18 }, { wch: 32 }, { wch: 14 }, { wch: 23 },
+      { wch: 28 }, { wch: 28 }, { wch: 20 }, { wch: 20 }, { wch: 38 },
+    ];
+    worksheet["!autofilter"] = { ref: `A1:Q${rows.length + 1}` };
+    for (let row = 2; row <= rows.length + 1; row += 1) {
+      if (worksheet[`B${row}`]) worksheet[`B${row}`].z = "mm/dd/yyyy hh:mm";
+      if (worksheet[`K${row}`]) worksheet[`K${row}`].z = "mm/dd/yyyy";
+      if (worksheet[`O${row}`]) worksheet[`O${row}`].z = "mm/dd/yyyy hh:mm";
+      if (worksheet[`P${row}`]) worksheet[`P${row}`].z = "mm/dd/yyyy hh:mm";
+    }
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Request History");
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx", cellDates: true });
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filenameBase}.xlsx"`);
+    return res.send(buffer);
+  }
+
+  const rows = requests.map((request) => requestExportRow(request));
+  const csv = [EXPORT_HEADERS, ...rows].map((row) => row.map(escapeCsv).join(",")).join("\r\n");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filenameBase}.csv"`);
+  return res.send(`\uFEFF${csv}`);
 };
 
 export const getReallocationNotifications = async (req, res) => {

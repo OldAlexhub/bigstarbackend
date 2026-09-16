@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import Division from "../models/Division.js";
 import RunCutDay from "../models/RunCutDay.js";
-import { getDailyScheduleReport } from "./dailyScheduleReportController.js";
+import {
+  exceptionRowsForReport,
+  getDailyScheduleReport,
+  hasDailyScheduleException,
+} from "./dailyScheduleReportController.js";
 
 const responseRecorder = () => ({
   statusCode: 200,
@@ -136,4 +140,26 @@ test("a standby from a sibling branch is used in the selected branch's client re
     Division.find = originalDivisionFind;
     RunCutDay.find = originalRunCutDayFind;
   }
+});
+
+test("day-specific override flags and extra routes are schedule exceptions", () => {
+  assert.equal(hasDailyScheduleException({ status: "active", overrides: {} }), false);
+  assert.equal(
+    hasDailyScheduleException({ status: "active", overrides: { endTime: true, clientNotes: true } }),
+    true
+  );
+  assert.equal(hasDailyScheduleException({ status: "add_rte", isExtra: true }), true);
+});
+
+test("the Updates report contains only exception rows", () => {
+  const rows = [
+    { routeId: "route-1", route: "R1", status: "active", isException: false },
+    { routeId: "route-2", route: "R2", status: "active", isException: true },
+    { routeId: "route-3", route: "R3", status: "off", isException: true },
+  ];
+
+  assert.deepEqual(exceptionRowsForReport(rows), [
+    { routeId: "route-2", route: "R2", status: "active", dailyChanges: "Active" },
+    { routeId: "route-3", route: "R3", status: "off", dailyChanges: "Off" },
+  ]);
 });

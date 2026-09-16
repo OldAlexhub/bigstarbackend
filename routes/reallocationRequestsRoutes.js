@@ -5,6 +5,7 @@ import {
   acceptReallocationRequest,
   acknowledgeReallocationNotifications,
   createReallocationRequest,
+  exportReallocationRequests,
   getReallocationNotifications,
   getPendingReallocationNotifications,
   listReallocationRequests,
@@ -16,6 +17,7 @@ router.use(protect);
 router.get("/notifications", requireSection("network_success"), getReallocationNotifications);
 router.get("/pending-notifications", requireSection("deployment"), getPendingReallocationNotifications);
 router.post("/acknowledge", requireSection("network_success"), acknowledgeReallocationNotifications);
+router.get("/export", requireAnySection(["network_success", "deployment"]), exportReallocationRequests);
 router.get("/", requireAnySection(["network_success", "deployment"]), listReallocationRequests);
 router.post("/", requireSection("network_success"), createReallocationRequest);
 router.post("/:id/accept", requireSection("deployment"), acceptReallocationRequest);
