@@ -13,6 +13,7 @@ test("page access normalization rejects unknown pages and removes duplicates", (
     ["dashboard", "safety.scores"]
   );
   assert.equal(PAGE_ACCESS.includes("deployment.client_report"), true);
+  assert.equal(PAGE_ACCESS.includes("network_success.tui_helper"), true);
 });
 
 test("sections are derived from the selected granular pages", () => {

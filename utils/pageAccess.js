@@ -35,6 +35,7 @@ export const PAGE_ACCESS_GROUPS = [
       "network_success.posts",
       "network_success.email_templates",
       "network_success.ld_helper",
+      "network_success.tui_helper",
     ],
   },
   {
