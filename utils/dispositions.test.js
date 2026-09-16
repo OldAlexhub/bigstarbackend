@@ -86,6 +86,68 @@ test("standby coverage activates the covered route and owns its disposition", ()
   assert.equal(runCutDay.dispositionStandbyDay, "standby-day-id");
 });
 
+test("removing standby restores an unassigned or suspended route's exact prior state", () => {
+  const priorStates = [
+    {
+      label: "unassigned",
+      status: "unassigned",
+      statusOverride: false,
+      serviceHours: 6.75,
+      revenueHours: 5.4,
+      disposition: null,
+      dispositionSource: null,
+    },
+    {
+      label: "suspended",
+      status: "suspended",
+      statusOverride: true,
+      serviceHours: 4.25,
+      revenueHours: 3.1,
+      disposition: CLOSED_SUSPENDED_DISPOSITION,
+      dispositionSource: "status",
+    },
+  ];
+
+  for (const prior of priorStates) {
+    const runCutDay = {
+      status: prior.status,
+      serviceHours: prior.serviceHours,
+      revenueHours: prior.revenueHours,
+      disposition: prior.disposition,
+      dispositionSource: prior.dispositionSource,
+      dispositionStandbyDay: null,
+      routeStateStandbyDay: null,
+      statusBeforeStandby: null,
+      statusOverrideBeforeStandby: false,
+      serviceHoursBeforeStandby: null,
+      revenueHoursBeforeStandby: null,
+      dispositionBeforeStandby: null,
+      dispositionSourceBeforeStandby: null,
+      dispositionStandbyDayBeforeStandby: null,
+      overrides: { status: prior.statusOverride },
+    };
+
+    activateRouteWithStandbyCoverage(runCutDay, "standby-day-id");
+    runCutDay.overrides.status = true;
+    runCutDay.serviceHours = 9;
+    runCutDay.revenueHours = 7.2;
+
+    // Re-saving the same deployment must not replace the original snapshot
+    // with the temporary active state.
+    activateRouteWithStandbyCoverage(runCutDay, "standby-day-id");
+
+    assert.equal(removeStandbyCoverageFromRoute(runCutDay, "standby-day-id"), true, prior.label);
+    assert.equal(runCutDay.status, prior.status, prior.label);
+    assert.equal(runCutDay.overrides.status, prior.statusOverride, prior.label);
+    assert.equal(runCutDay.serviceHours, prior.serviceHours, prior.label);
+    assert.equal(runCutDay.revenueHours, prior.revenueHours, prior.label);
+    assert.equal(runCutDay.disposition, prior.disposition, prior.label);
+    assert.equal(runCutDay.dispositionSource, prior.dispositionSource, prior.label);
+    assert.equal(runCutDay.dispositionStandbyDay, null, prior.label);
+    assert.equal(runCutDay.routeStateStandbyDay, null, prior.label);
+  }
+});
+
 test("standby coverage carries its pullout address to the covered route and restores the prior value", () => {
   const runCutDay = {
     status: "active",

@@ -106,6 +106,47 @@ const runCutDaySchema = new mongoose.Schema(
       ref: "RunCutDay",
       default: null,
     },
+    // Standby coverage temporarily activates a route and recalculates its
+    // hours. Keep an owner-scoped snapshot so removing or moving that exact
+    // standby restores the route-day without stealing a pre-existing status
+    // override or losing its prior disposition ownership.
+    routeStateStandbyDay: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RunCutDay",
+      default: null,
+    },
+    statusBeforeStandby: {
+      type: String,
+      enum: [...RUN_CUT_STATUSES, null],
+      default: null,
+    },
+    statusOverrideBeforeStandby: {
+      type: Boolean,
+      default: false,
+    },
+    serviceHoursBeforeStandby: {
+      type: Number,
+      default: null,
+    },
+    revenueHoursBeforeStandby: {
+      type: Number,
+      default: null,
+    },
+    dispositionBeforeStandby: {
+      type: String,
+      enum: [...DISPOSITION_TYPES, null],
+      default: null,
+    },
+    dispositionSourceBeforeStandby: {
+      type: String,
+      enum: ["manual", "standby", "status", null],
+      default: null,
+    },
+    dispositionStandbyDayBeforeStandby: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RunCutDay",
+      default: null,
+    },
     deployed: {
       type: Boolean,
       default: false,

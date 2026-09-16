@@ -48,6 +48,19 @@ export const activateRouteWithStandbyCoverage = (
   standbyRunCutDayId,
   standbyPulloutAddress
 ) => {
+  const alreadyOwnsRouteState =
+    String(runCutDay.routeStateStandbyDay || "") === String(standbyRunCutDayId);
+  if (!alreadyOwnsRouteState) {
+    runCutDay.routeStateStandbyDay = standbyRunCutDayId;
+    runCutDay.statusBeforeStandby = runCutDay.status;
+    runCutDay.statusOverrideBeforeStandby = Boolean(runCutDay.overrides?.status);
+    runCutDay.serviceHoursBeforeStandby = runCutDay.serviceHours ?? 0;
+    runCutDay.revenueHoursBeforeStandby = runCutDay.revenueHours ?? 0;
+    runCutDay.dispositionBeforeStandby = runCutDay.disposition || null;
+    runCutDay.dispositionSourceBeforeStandby = runCutDay.dispositionSource || null;
+    runCutDay.dispositionStandbyDayBeforeStandby = runCutDay.dispositionStandbyDay || null;
+  }
+
   runCutDay.status = "active";
   runCutDay.disposition = STANDBY_DISPOSITION;
   runCutDay.dispositionSource = "standby";
@@ -68,11 +81,34 @@ export const activateRouteWithStandbyCoverage = (
 
 export const removeStandbyCoverageFromRoute = (runCutDay, standbyRunCutDayId) => {
   let changed = false;
+  const standbyOwnsRouteState =
+    String(runCutDay.routeStateStandbyDay || "") === String(standbyRunCutDayId);
   const standbyOwnsDisposition =
     runCutDay.disposition === STANDBY_DISPOSITION &&
     runCutDay.dispositionSource === "standby" &&
     String(runCutDay.dispositionStandbyDay || "") === String(standbyRunCutDayId);
-  if (standbyOwnsDisposition) {
+
+  if (standbyOwnsRouteState) {
+    runCutDay.status = runCutDay.statusBeforeStandby;
+    if (runCutDay.overrides) {
+      runCutDay.overrides.status = Boolean(runCutDay.statusOverrideBeforeStandby);
+    }
+    runCutDay.serviceHours = runCutDay.serviceHoursBeforeStandby ?? 0;
+    runCutDay.revenueHours = runCutDay.revenueHoursBeforeStandby ?? 0;
+    runCutDay.disposition = runCutDay.dispositionBeforeStandby || null;
+    runCutDay.dispositionSource = runCutDay.dispositionSourceBeforeStandby || null;
+    runCutDay.dispositionStandbyDay = runCutDay.dispositionStandbyDayBeforeStandby || null;
+
+    runCutDay.routeStateStandbyDay = null;
+    runCutDay.statusBeforeStandby = null;
+    runCutDay.statusOverrideBeforeStandby = false;
+    runCutDay.serviceHoursBeforeStandby = null;
+    runCutDay.revenueHoursBeforeStandby = null;
+    runCutDay.dispositionBeforeStandby = null;
+    runCutDay.dispositionSourceBeforeStandby = null;
+    runCutDay.dispositionStandbyDayBeforeStandby = null;
+    changed = true;
+  } else if (standbyOwnsDisposition) {
     runCutDay.disposition = null;
     runCutDay.dispositionSource = null;
     runCutDay.dispositionStandbyDay = null;

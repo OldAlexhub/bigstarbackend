@@ -9,6 +9,7 @@ export const restoreCoverageOwnedByStandbyDays = async (standbyDayIds, updatedBy
   const idSet = new Set(standbyDayIds.map(String));
   const coveredDays = await RunCutDay.find({
     $or: [
+      { routeStateStandbyDay: { $in: standbyDayIds } },
       { dispositionStandbyDay: { $in: standbyDayIds } },
       { pulloutAddressStandbyDay: { $in: standbyDayIds } },
     ],
@@ -16,7 +17,11 @@ export const restoreCoverageOwnedByStandbyDays = async (standbyDayIds, updatedBy
 
   await Promise.all(
     coveredDays.map(async (coveredDay) => {
-      const ownerIds = [coveredDay.dispositionStandbyDay, coveredDay.pulloutAddressStandbyDay]
+      const ownerIds = [
+        coveredDay.routeStateStandbyDay,
+        coveredDay.dispositionStandbyDay,
+        coveredDay.pulloutAddressStandbyDay,
+      ]
         .filter((id) => id && idSet.has(String(id)));
       let changed = false;
       for (const ownerId of [...new Set(ownerIds.map(String))]) {
