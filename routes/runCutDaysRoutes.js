@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireAnySection } from "../middleware/access.js";
+import { requireAnyPageAccess, requirePageAccess } from "../middleware/access.js";
 import {
   listRunCutDays,
   setRunCutDayDeployed,
@@ -13,10 +13,17 @@ const router = Router();
 
 router.use(protect);
 
-router.get("/", requireAnySection(["master_run_cuts", "deployment", "network_success"]), listRunCutDays);
-router.post("/", requireAnySection(["master_run_cuts", "deployment"]), createExtraRunCutDay);
-router.patch("/:id/deployed", requireAnySection(["master_run_cuts", "deployment"]), setRunCutDayDeployed);
-router.patch("/:id", requireAnySection(["master_run_cuts", "deployment"]), updateRunCutDayException);
-router.delete("/:id", requireAnySection(["master_run_cuts", "deployment"]), deleteExtraRunCutDay);
+const schedulePages = [
+  "deployment.live_schedule",
+  "deployment.standby_utilization",
+  "deployment.reporting",
+  "deployment.schedule_history",
+];
+
+router.get("/", requireAnyPageAccess(schedulePages), listRunCutDays);
+router.post("/", requirePageAccess("deployment.live_schedule"), createExtraRunCutDay);
+router.patch("/:id/deployed", requirePageAccess("deployment.live_schedule"), setRunCutDayDeployed);
+router.patch("/:id", requireAnyPageAccess(["deployment.live_schedule", "deployment.schedule_history"]), updateRunCutDayException);
+router.delete("/:id", requirePageAccess("deployment.live_schedule"), deleteExtraRunCutDay);
 
 export default router;

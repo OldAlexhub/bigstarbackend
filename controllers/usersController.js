@@ -1,4 +1,5 @@
 import User, { ROLES, SECTIONS } from "../models/User.js";
+import { normalizePageAccess, sectionsForPageAccess } from "../utils/pageAccess.js";
 
 const duplicateMessage = (error) => {
   const field = Object.keys(error.keyPattern || {})[0] || "value";
@@ -9,12 +10,14 @@ const sanitizeSections = (sections) =>
   Array.isArray(sections) ? sections.filter((s) => SECTIONS.includes(s)) : undefined;
 
 export const listUsers = async (req, res) => {
-  const users = await User.find({}).populate("divisionAccess", "code name").sort({ name: 1 });
+  const users = await User.find({})
+    .populate({ path: "divisionAccess", select: "code name", match: { active: { $ne: false } } })
+    .sort({ name: 1 });
   res.json({ users: users.map((u) => u.toPublicJSON()) });
 };
 
 export const createUser = async (req, res) => {
-  const { username, password, name, email, phone, title, department, role, sections, divisionAccess } = req.body;
+  const { username, password, name, email, phone, title, department, role, sections, pageAccess, divisionAccess } = req.body;
   if (!username || !password || !name) {
     return res.status(400).json({ message: "username, password, and name are required" });
   }
@@ -23,6 +26,7 @@ export const createUser = async (req, res) => {
   }
 
   try {
+    const normalizedPageAccess = normalizePageAccess(pageAccess);
     const user = await User.create({
       username,
       password,
@@ -32,10 +36,16 @@ export const createUser = async (req, res) => {
       title: title || "",
       department: department || "",
       role: role || undefined,
-      sections: sanitizeSections(sections) || [],
+      sections: normalizedPageAccess !== undefined ? sectionsForPageAccess(normalizedPageAccess) : sanitizeSections(sections) || [],
+      pageAccess: normalizedPageAccess || [],
+      pageAccessConfigured: normalizedPageAccess !== undefined,
       divisionAccess: divisionAccess || [],
     });
-    const populated = await user.populate("divisionAccess", "code name");
+    const populated = await user.populate({
+      path: "divisionAccess",
+      select: "code name",
+      match: { active: { $ne: false } },
+    });
     res.status(201).json({ user: populated.toPublicJSON() });
   } catch (error) {
     if (error.code === 11000) return res.status(409).json({ message: duplicateMessage(error) });
@@ -47,7 +57,7 @@ export const updateUser = async (req, res) => {
   const user = await User.findById(req.params.id);
   if (!user) return res.status(404).json({ message: "User not found" });
 
-  const { password, name, email, phone, title, department, role, sections, divisionAccess, active } = req.body;
+  const { password, name, email, phone, title, department, role, sections, pageAccess, divisionAccess, active } = req.body;
   if (role !== undefined) {
     if (!ROLES.includes(role)) return res.status(400).json({ message: `role must be one of: ${ROLES.join(", ")}` });
     user.role = role;
@@ -58,7 +68,14 @@ export const updateUser = async (req, res) => {
   if (phone !== undefined) user.phone = phone;
   if (title !== undefined) user.title = title;
   if (department !== undefined) user.department = department;
-  if (sections !== undefined) user.sections = sanitizeSections(sections) || [];
+  const normalizedPageAccess = normalizePageAccess(pageAccess);
+  if (normalizedPageAccess !== undefined) {
+    user.pageAccess = normalizedPageAccess;
+    user.pageAccessConfigured = true;
+    user.sections = sectionsForPageAccess(normalizedPageAccess);
+  } else if (sections !== undefined) {
+    user.sections = sanitizeSections(sections) || [];
+  }
   if (divisionAccess !== undefined) user.divisionAccess = divisionAccess;
   if (active !== undefined) {
     if (!active && user._id.toString() === req.user._id.toString()) {
@@ -69,7 +86,11 @@ export const updateUser = async (req, res) => {
 
   try {
     await user.save();
-    const populated = await user.populate("divisionAccess", "code name");
+    const populated = await user.populate({
+      path: "divisionAccess",
+      select: "code name",
+      match: { active: { $ne: false } },
+    });
     res.json({ user: populated.toPublicJSON() });
   } catch (error) {
     if (error.code === 11000) return res.status(409).json({ message: duplicateMessage(error) });

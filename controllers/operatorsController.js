@@ -23,7 +23,10 @@ export const listOperators = async (req, res) => {
     }
     filter.division = req.query.division;
   } else {
-    const accessibleDivisionIds = await Division.find(divisionFilter(req.user)).distinct("_id");
+    const accessibleDivisionIds = await Division.find({
+      ...divisionFilter(req.user),
+      active: { $ne: false },
+    }).distinct("_id");
     filter.division = { $in: accessibleDivisionIds };
   }
   if (req.query.active === "1") filter.active = true;

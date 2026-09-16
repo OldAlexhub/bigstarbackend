@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
+import { PAGE_ACCESS } from "../utils/pageAccess.js";
 
 export const SECTIONS = [
   "master_run_cuts",
@@ -69,6 +70,15 @@ const userSchema = new mongoose.Schema(
       enum: SECTIONS,
       default: [],
     },
+    pageAccess: {
+      type: [String],
+      enum: PAGE_ACCESS,
+      default: [],
+    },
+    pageAccessConfigured: {
+      type: Boolean,
+      default: false,
+    },
     divisionAccess: {
       type: [mongoose.Schema.Types.ObjectId],
       ref: "Division",
@@ -101,6 +111,8 @@ userSchema.methods.toPublicJSON = function () {
     active: this.active,
     role: this.role,
     sections: this.sections,
+    pageAccess: this.pageAccess,
+    pageAccessConfigured: this.pageAccessConfigured,
     divisionAccess: this.divisionAccess,
   };
 };

@@ -1,13 +1,14 @@
 import mongoose from "mongoose";
 import Division from "../models/Division.js";
 import TeamPost, { POST_SECTIONS } from "../models/TeamPost.js";
-import { canAccessDivision, canAccessSection, divisionFilter } from "../middleware/access.js";
+import { canAccessDivision, canAccessPage, divisionFilter } from "../middleware/access.js";
 
 const clean = (value) => String(value || "").trim();
 const otherSection = (section) => section === "network_success" ? "deployment" : "network_success";
 
+const postPage = (section) => `${section}.posts`;
 const validateSection = (user, section) =>
-  POST_SECTIONS.includes(section) && canAccessSection(user, section);
+  POST_SECTIONS.includes(section) && canAccessPage(user, postPage(section));
 
 const populatePost = (query) =>
   query
@@ -119,7 +120,10 @@ export const respondToTeamPost = async (req, res) => {
 export const getTeamPostNotifications = async (req, res) => {
   const { section } = req.query;
   if (!validateSection(req.user, section)) return res.status(403).json({ message: "Access to this post section is required." });
-  const divisionIds = await Division.find(divisionFilter(req.user)).distinct("_id");
+  const divisionIds = await Division.find({
+    ...divisionFilter(req.user),
+    active: { $ne: false },
+  }).distinct("_id");
   const posts = await TeamPost.find({
     division: { $in: divisionIds },
     $or: [

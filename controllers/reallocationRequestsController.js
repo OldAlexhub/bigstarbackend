@@ -7,6 +7,7 @@ import { canAccessDivision, divisionFilter } from "../middleware/access.js";
 import { parseDateOnly } from "../utils/dateRange.js";
 import { approveOrApplyReallocation, normalizeReallocationAssignment } from "../utils/reallocationRequests.js";
 import { respondToHttpError } from "../utils/httpError.js";
+import { resolveOperator, resolveVehicle } from "../utils/resolveAssignment.js";
 
 const populateRequest = (query) =>
   query
@@ -168,7 +169,10 @@ export const exportReallocationRequests = async (req, res) => {
 };
 
 export const getReallocationNotifications = async (req, res) => {
-  const divisionIds = await Division.find(divisionFilter(req.user)).distinct("_id");
+  const divisionIds = await Division.find({
+    ...divisionFilter(req.user),
+    active: { $ne: false },
+  }).distinct("_id");
   const unread = await ReallocationRequest.find({
     division: { $in: divisionIds },
     status: { $in: ["approved", "applied"] },
@@ -178,7 +182,10 @@ export const getReallocationNotifications = async (req, res) => {
 };
 
 export const getPendingReallocationNotifications = async (req, res) => {
-  const divisionIds = await Division.find(divisionFilter(req.user)).distinct("_id");
+  const divisionIds = await Division.find({
+    ...divisionFilter(req.user),
+    active: { $ne: false },
+  }).distinct("_id");
   const pending = await ReallocationRequest.find({
     division: { $in: divisionIds },
     status: "pending",
@@ -211,7 +218,7 @@ export const createReallocationRequest = async (req, res) => {
   const parsedDate = parseDateOnly(effectiveDate, "effectiveDate");
   if (parsedDate.error) return res.status(400).json({ message: parsedDate.error });
 
-  const requestedOperatorName = clean(req.body.operatorName);
+  let requestedOperatorName = clean(req.body.operatorName);
   let requestedVehicleCode = clean(req.body.vehicleCode);
   let requestedPulloutAddress = clean(req.body.pulloutAddress);
   if (requestedOperatorName.length > 120 || requestedVehicleCode.length > 50 || requestedPulloutAddress.length > 300) {
@@ -252,6 +259,21 @@ export const createReallocationRequest = async (req, res) => {
     vehicleCode: requestedVehicleCode,
     pulloutAddress: requestedPulloutAddress,
   }));
+
+  // Snapshot only controlled roster values. The browser presents selects,
+  // but this server-side resolution prevents a hand-crafted request from
+  // introducing a driver, vehicle, or pullout address that is not in the
+  // selected division's active Master Run Cuts rosters.
+  try {
+    const rosterOperatorName = requestedOperatorName || (destination ? current.operator?.name || "" : "");
+    const operatorDoc = await resolveOperator(division, rosterOperatorName);
+    const vehicleDoc = await resolveVehicle(division, requestedVehicleCode);
+    if (requestedOperatorName) requestedOperatorName = operatorDoc.name;
+    requestedVehicleCode = vehicleDoc?.code || "";
+    requestedPulloutAddress = operatorDoc?.pulloutAddress || "";
+  } catch (error) {
+    return respondToHttpError(error, res);
+  }
 
   const originalOperatorName = current.operator?.name || "";
   const originalVehicleCode = current.vehicle?.code || "";

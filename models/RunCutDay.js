@@ -34,6 +34,23 @@ const runCutDaySchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    // When standby coverage temporarily supplies this route's pullout
+    // address, retain the route-day value that was replaced so removing or
+    // moving that coverage can restore it without losing a manual override.
+    pulloutAddressStandbyDay: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RunCutDay",
+      default: null,
+    },
+    pulloutAddressBeforeStandby: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    pulloutAddressOverrideBeforeStandby: {
+      type: Boolean,
+      default: false,
+    },
     startTime: {
       type: String,
       default: null,

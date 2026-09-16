@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireSection } from "../middleware/access.js";
+import { requirePageAccess } from "../middleware/access.js";
 import {
   confirmSubmission,
   getPerformance,
@@ -36,15 +36,15 @@ const receiveWorkbooks = (req, res, next) => {
   });
 };
 
-router.use(protect, requireSection("network_success"));
-router.get("/submissions", listSubmissions);
-router.get("/entries", listEntries);
-router.get("/performance", getPerformance);
-router.delete("/submissions/:id", removeSubmission);
-router.post("/submissions/:id/reopen", reopenSubmission);
-router.patch("/entries/:id/assignment", updatePerformanceAssignment);
-router.post("/submissions/preprocess", receiveWorkbooks, preprocessSubmission);
-router.post("/submissions/:id/preview", previewSubmission);
-router.post("/submissions/:id/confirm", confirmSubmission);
+router.use(protect);
+router.get("/submissions", requirePageAccess("network_success.excel_submissions"), listSubmissions);
+router.get("/entries", requirePageAccess("network_success.excel_submissions"), listEntries);
+router.get("/performance", requirePageAccess("network_success.performance"), getPerformance);
+router.delete("/submissions/:id", requirePageAccess("network_success.excel_submissions"), removeSubmission);
+router.post("/submissions/:id/reopen", requirePageAccess("network_success.excel_submissions"), reopenSubmission);
+router.patch("/entries/:id/assignment", requirePageAccess("network_success.performance"), updatePerformanceAssignment);
+router.post("/submissions/preprocess", requirePageAccess("network_success.excel_submissions"), receiveWorkbooks, preprocessSubmission);
+router.post("/submissions/:id/preview", requirePageAccess("network_success.excel_submissions"), previewSubmission);
+router.post("/submissions/:id/confirm", requirePageAccess("network_success.excel_submissions"), confirmSubmission);
 
 export default router;

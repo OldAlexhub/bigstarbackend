@@ -5,6 +5,7 @@ import RunCutDay from "../models/RunCutDay.js";
 import DailyIssueLog from "../models/DailyIssueLog.js";
 import { canAccessDivision, divisionFilter } from "../middleware/access.js";
 import { runInTransaction } from "../utils/transaction.js";
+import { restoreCoverageOwnedByStandbyDays } from "../utils/standbyCoveragePersistence.js";
 
 export const listRoutes = async (req, res) => {
   const typeFilter = req.query.includeStandby === "1" ? {} : { type: { $ne: "standby" } };
@@ -20,7 +21,10 @@ export const listRoutes = async (req, res) => {
     return res.json({ routes });
   }
 
-  const accessibleDivisionIds = await Division.find(divisionFilter(req.user)).distinct("_id");
+  const accessibleDivisionIds = await Division.find({
+    ...divisionFilter(req.user),
+    active: { $ne: false },
+  }).distinct("_id");
   const routes = await Route.find({ division: { $in: accessibleDivisionIds }, ...typeFilter, ...activeFilter })
     .sort({ code: 1 })
     .populate("division", "code name");
@@ -90,10 +94,7 @@ export const deleteRoute = async (req, res) => {
     const futureRunCutDays = await RunCutDay.find({ route: route._id, date: { $gte: today } });
     const futureIds = futureRunCutDays.map((rcd) => rcd._id);
     await DailyIssueLog.deleteMany({ runCutDay: { $in: futureIds }, autoSyncTag: { $ne: null } });
-    await RunCutDay.updateMany(
-      { dispositionSource: "standby", dispositionStandbyDay: { $in: futureIds } },
-      { $set: { disposition: null, dispositionSource: null, dispositionStandbyDay: null } }
-    );
+    await restoreCoverageOwnedByStandbyDays(futureIds, req.user._id);
     await RunCutDay.deleteMany({ _id: { $in: futureIds } });
     await RunCut.deleteOne({ route: route._id });
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireAnySection, requireSection } from "../middleware/access.js";
+import { requireAnyPageAccess, requirePageAccess } from "../middleware/access.js";
 import {
   acceptReallocationRequest,
   acknowledgeReallocationNotifications,
@@ -14,12 +14,14 @@ import {
 const router = Router();
 
 router.use(protect);
-router.get("/notifications", requireSection("network_success"), getReallocationNotifications);
-router.get("/pending-notifications", requireSection("deployment"), getPendingReallocationNotifications);
-router.post("/acknowledge", requireSection("network_success"), acknowledgeReallocationNotifications);
-router.get("/export", requireAnySection(["network_success", "deployment"]), exportReallocationRequests);
-router.get("/", requireAnySection(["network_success", "deployment"]), listReallocationRequests);
-router.post("/", requireSection("network_success"), createReallocationRequest);
-router.post("/:id/accept", requireSection("deployment"), acceptReallocationRequest);
+const requestPages = ["network_success.reallocation_requests", "deployment.receiving_requests"];
+
+router.get("/notifications", requirePageAccess("network_success.reallocation_requests"), getReallocationNotifications);
+router.get("/pending-notifications", requirePageAccess("deployment.receiving_requests"), getPendingReallocationNotifications);
+router.post("/acknowledge", requirePageAccess("network_success.reallocation_requests"), acknowledgeReallocationNotifications);
+router.get("/export", requireAnyPageAccess(requestPages), exportReallocationRequests);
+router.get("/", requireAnyPageAccess(requestPages), listReallocationRequests);
+router.post("/", requirePageAccess("network_success.reallocation_requests"), createReallocationRequest);
+router.post("/:id/accept", requirePageAccess("deployment.receiving_requests"), acceptReallocationRequest);
 
 export default router;

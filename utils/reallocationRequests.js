@@ -257,7 +257,11 @@ export const approveOrApplyReallocation = async (requestId, reviewer = null) => 
 };
 
 export const applyDueReallocations = async () => {
-  const approved = await ReallocationRequest.find({ status: "approved" }).populate("division", "timezone");
+  const activeDivisionIds = await Division.find({ active: { $ne: false } }).distinct("_id");
+  const approved = await ReallocationRequest.find({
+    status: "approved",
+    division: { $in: activeDivisionIds },
+  }).populate("division", "timezone");
   let applied = 0;
 
   for (const request of approved) {

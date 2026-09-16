@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireAnySection } from "../middleware/access.js";
+import { requireAnyPageAccess, requirePageAccess } from "../middleware/access.js";
 import {
   listRoutes,
   createRoute,
@@ -12,9 +12,14 @@ const router = Router();
 
 router.use(protect);
 
-router.get("/", requireAnySection(["master_run_cuts", "deployment", "network_success"]), listRoutes);
-router.post("/", requireAnySection(["master_run_cuts", "deployment"]), createRoute);
-router.patch("/:id", requireAnySection(["master_run_cuts", "deployment"]), updateRoute);
-router.delete("/:id", requireAnySection(["master_run_cuts", "deployment"]), deleteRoute);
+router.get("/", requireAnyPageAccess([
+  "master_run_cuts.run_cuts",
+  "deployment.live_schedule",
+  "deployment.issue_log",
+  "network_success.reallocation_requests",
+]), listRoutes);
+router.post("/", requirePageAccess("master_run_cuts.run_cuts"), createRoute);
+router.patch("/:id", requirePageAccess("master_run_cuts.run_cuts"), updateRoute);
+router.delete("/:id", requirePageAccess("master_run_cuts.run_cuts"), deleteRoute);
 
 export default router;

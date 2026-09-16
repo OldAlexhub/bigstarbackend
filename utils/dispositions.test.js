@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   activateRouteWithStandbyCoverage,
   CLOSED_SUSPENDED_DISPOSITION,
+  removeStandbyCoverageFromRoute,
   syncDispositionWithStatus,
   syncStatusWithDisposition,
 } from "./dispositions.js";
@@ -83,4 +84,49 @@ test("standby coverage activates the covered route and owns its disposition", ()
   assert.equal(runCutDay.disposition, "deployed_stby");
   assert.equal(runCutDay.dispositionSource, "standby");
   assert.equal(runCutDay.dispositionStandbyDay, "standby-day-id");
+});
+
+test("standby coverage carries its pullout address to the covered route and restores the prior value", () => {
+  const runCutDay = {
+    status: "active",
+    disposition: null,
+    dispositionSource: null,
+    dispositionStandbyDay: null,
+    pulloutAddress: "Original Garage",
+    pulloutAddressStandbyDay: null,
+    pulloutAddressBeforeStandby: "",
+    pulloutAddressOverrideBeforeStandby: false,
+    overrides: { pulloutAddress: false },
+  };
+
+  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", "Standby Depot");
+
+  assert.equal(runCutDay.pulloutAddress, "Standby Depot");
+  assert.equal(runCutDay.pulloutAddressStandbyDay, "standby-day-id");
+  assert.equal(runCutDay.pulloutAddressBeforeStandby, "Original Garage");
+  assert.equal(runCutDay.overrides.pulloutAddress, true);
+
+  assert.equal(removeStandbyCoverageFromRoute(runCutDay, "standby-day-id"), true);
+  assert.equal(runCutDay.pulloutAddress, "Original Garage");
+  assert.equal(runCutDay.pulloutAddressStandbyDay, null);
+  assert.equal(runCutDay.overrides.pulloutAddress, false);
+});
+
+test("refreshing the same standby coverage does not replace the original pullout snapshot", () => {
+  const runCutDay = {
+    pulloutAddress: "Original Garage",
+    pulloutAddressStandbyDay: null,
+    pulloutAddressBeforeStandby: "",
+    pulloutAddressOverrideBeforeStandby: true,
+    overrides: { pulloutAddress: true },
+  };
+
+  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", "First Standby Depot");
+  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", "Updated Standby Depot");
+
+  assert.equal(runCutDay.pulloutAddress, "Updated Standby Depot");
+  assert.equal(runCutDay.pulloutAddressBeforeStandby, "Original Garage");
+  removeStandbyCoverageFromRoute(runCutDay, "standby-day-id");
+  assert.equal(runCutDay.pulloutAddress, "Original Garage");
+  assert.equal(runCutDay.overrides.pulloutAddress, true);
 });

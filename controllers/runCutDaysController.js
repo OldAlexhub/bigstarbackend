@@ -12,7 +12,7 @@ import {
   activateRouteWithStandbyCoverage,
   CLOSED_SUSPENDED_DISPOSITION,
   DISPOSITION_TYPES,
-  STANDBY_DISPOSITION,
+  removeStandbyCoverageFromRoute,
   syncDispositionWithStatus,
   syncStatusWithDisposition,
 } from "../utils/dispositions.js";
@@ -194,27 +194,25 @@ export const setRunCutDayDeployed = async (req, res) => {
         (!deployed || String(previousCoveringRoute) !== String(runCutDay.coveringRoute));
 
       if (coverageChanged) {
-        await RunCutDay.updateOne(
-          {
-            route: previousCoveringRoute,
-            date: runCutDay.date,
-            disposition: STANDBY_DISPOSITION,
-            dispositionSource: "standby",
-            dispositionStandbyDay: runCutDay._id,
-          },
-          {
-            $set: {
-              disposition: null,
-              dispositionSource: null,
-              dispositionStandbyDay: null,
-              updatedBy: req.user._id,
-            },
-          }
-        );
+        const previouslyCoveredRunCutDay = await RunCutDay.findOne({
+          route: previousCoveringRoute,
+          date: runCutDay.date,
+        });
+        if (
+          previouslyCoveredRunCutDay &&
+          removeStandbyCoverageFromRoute(previouslyCoveredRunCutDay, runCutDay._id)
+        ) {
+          previouslyCoveredRunCutDay.updatedBy = req.user._id;
+          await previouslyCoveredRunCutDay.save();
+        }
       }
 
       if (deployed && coveredRunCutDay) {
-        activateRouteWithStandbyCoverage(coveredRunCutDay, runCutDay._id);
+        activateRouteWithStandbyCoverage(
+          coveredRunCutDay,
+          runCutDay._id,
+          runCutDay.pulloutAddress
+        );
         coveredRunCutDay.overrides.status = true;
         const divisionDoc = await Division.findById(coveredRunCutDay.division);
         const thresholds = await getEffectiveThresholds(divisionDoc);
@@ -321,7 +319,9 @@ export const updateRunCutDayException = async (req, res) => {
       return respondToHttpError(error, res);
     }
     runCutDay.operator = operatorDoc?._id || null;
-    runCutDay.pulloutAddress = operatorDoc?.pulloutAddress || "";
+    if (!runCutDay.pulloutAddressStandbyDay) {
+      runCutDay.pulloutAddress = operatorDoc?.pulloutAddress || "";
+    }
     runCutDay.overrides.operator = true;
     runCutDay.overrides.pulloutAddress = true;
     changeDescriptions.push(`operator to ${operatorDoc?.name || "unassigned"}`);

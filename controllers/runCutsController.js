@@ -63,7 +63,10 @@ export const listRunCuts = async (req, res) => {
     return res.json({ runCuts: withVehicleConflictFlags(excludeStandby(runCuts, includeStandby)) });
   }
 
-  const accessibleDivisionIds = await Division.find(divisionFilter(req.user)).distinct("_id");
+  const accessibleDivisionIds = await Division.find({
+    ...divisionFilter(req.user),
+    active: { $ne: false },
+  }).distinct("_id");
   const runCuts = await populateRunCut(RunCut.find({ division: { $in: accessibleDivisionIds } }));
   res.json({ runCuts: withVehicleConflictFlags(excludeStandby(runCuts, includeStandby)) });
 };

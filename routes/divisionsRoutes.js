@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireAnySection, requireELT } from "../middleware/access.js";
+import { requireAnyPageAccess, requirePageAccess, requireELT } from "../middleware/access.js";
+import { PAGE_ACCESS } from "../utils/pageAccess.js";
 import {
   listDivisions,
   createDivision,
@@ -12,9 +13,11 @@ const router = Router();
 
 router.use(protect);
 
-router.get("/", requireAnySection(["master_run_cuts", "deployment", "network_success", "customer_service", "safety", "operations_reporting"]), listDivisions);
-router.post("/", requireAnySection(["master_run_cuts", "deployment"]), requireELT, createDivision);
-router.patch("/:id", requireAnySection(["master_run_cuts", "deployment"]), updateDivision);
-router.delete("/:id", requireAnySection(["master_run_cuts", "deployment"]), requireELT, deleteDivision);
+const divisionPages = PAGE_ACCESS.filter((page) => !["dashboard", "leaderboard"].includes(page));
+
+router.get("/", requireAnyPageAccess(divisionPages), listDivisions);
+router.post("/", requirePageAccess("master_run_cuts.run_cuts"), requireELT, createDivision);
+router.patch("/:id", requirePageAccess("settings.general"), updateDivision);
+router.delete("/:id", requirePageAccess("settings.general"), requireELT, deleteDivision);
 
 export default router;

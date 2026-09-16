@@ -5,6 +5,7 @@ import { DAYS_OF_WEEK, computeHours } from "./hours.js";
 import { getEffectiveThresholds } from "./thresholds.js";
 import { syncAutoIssuesBulk } from "./autoIssueSync.js";
 import { todayInTimezone } from "./timezone.js";
+import { restoreCoverageOwnedByStandbyDays } from "./standbyCoveragePersistence.js";
 
 // Generate through today + 7 so the maximum OSR planning window always has
 // a daily schedule. A lower configured limit simply exposes fewer dates.
@@ -27,6 +28,7 @@ const dayOfWeekFor = (date) => DAYS_OF_WEEK[new Date(date).getUTCDay()];
 // document) naturally reverts to the plan — no explicit "clear" needed.
 export const projectAssignment = async (runCut, userId, { horizonDays = PROJECTION_HORIZON_DAYS } = {}) => {
   const divisionDoc = await Division.findById(runCut.division);
+  if (!divisionDoc || divisionDoc.active === false) return;
   const thresholds = await getEffectiveThresholds(divisionDoc);
   const start = todayInTimezone(divisionDoc?.timezone);
 
@@ -50,10 +52,7 @@ export const projectAssignment = async (runCut, userId, { horizonDays = PROJECTI
     const removableIds = removable.map((r) => r._id);
     if (removableIds.length) {
       await DailyIssueLog.deleteMany({ runCutDay: { $in: removableIds }, autoSyncTag: { $ne: null } });
-      await RunCutDay.updateMany(
-        { dispositionSource: "standby", dispositionStandbyDay: { $in: removableIds } },
-        { $set: { disposition: null, dispositionSource: null, dispositionStandbyDay: null } }
-      );
+      await restoreCoverageOwnedByStandbyDays(removableIds, userId);
       await RunCutDay.deleteMany({ _id: { $in: removableIds } });
     }
   }

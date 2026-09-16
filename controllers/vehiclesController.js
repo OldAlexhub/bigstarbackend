@@ -20,7 +20,10 @@ export const listVehicles = async (req, res) => {
     return res.json({ vehicles });
   }
 
-  const accessibleDivisionIds = await Division.find(divisionFilter(req.user)).distinct("_id");
+  const accessibleDivisionIds = await Division.find({
+    ...divisionFilter(req.user),
+    active: { $ne: false },
+  }).distinct("_id");
   const vehicles = await Vehicle.find({
     division: { $in: accessibleDivisionIds },
     ...(req.query.active === "1" && { active: true }),

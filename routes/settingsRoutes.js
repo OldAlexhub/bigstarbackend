@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireAnySection, requireSection, requireELT } from "../middleware/access.js";
+import { requireAnyPageAccess, requirePageAccess, requireELT } from "../middleware/access.js";
 import {
   getOperationsKpiSettings,
   getSettings,
@@ -12,9 +12,9 @@ const router = Router();
 
 router.use(protect);
 
-router.get("/", requireAnySection(["master_run_cuts", "deployment"]), getSettings);
-router.put("/", requireSection("master_run_cuts"), requireELT, updateSettings);
-router.get("/operations-kpis", requireSection("master_run_cuts"), getOperationsKpiSettings);
-router.put("/operations-kpis", requireSection("master_run_cuts"), requireELT, saveOperationsKpiSetting);
+router.get("/", requireAnyPageAccess(["settings.general", "deployment.live_schedule"]), getSettings);
+router.put("/", requirePageAccess("settings.general"), requireELT, updateSettings);
+router.get("/operations-kpis", requirePageAccess("settings.general"), getOperationsKpiSettings);
+router.put("/operations-kpis", requirePageAccess("settings.general"), requireELT, saveOperationsKpiSetting);
 
 export default router;

@@ -35,6 +35,9 @@ test("a new RunCutDay starts without a disposition", () => {
   assert.equal(runCutDay.overrides.operator, false);
   assert.equal(runCutDay.overrides.vehicle, false);
   assert.equal(runCutDay.overrides.pulloutAddress, false);
+  assert.equal(runCutDay.pulloutAddressStandbyDay, null);
+  assert.equal(runCutDay.pulloutAddressBeforeStandby, "");
+  assert.equal(runCutDay.pulloutAddressOverrideBeforeStandby, false);
   assert.equal(runCutDay.overrides.startTime, false);
   assert.equal(runCutDay.overrides.endTime, false);
 });

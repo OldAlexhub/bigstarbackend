@@ -43,9 +43,54 @@ export const syncStatusWithDisposition = (runCutDay, disposition) => {
 
 // Covering a route with standby means that duty is operating. Keep the
 // route's status and final outcome aligned in the same update.
-export const activateRouteWithStandbyCoverage = (runCutDay, standbyRunCutDayId) => {
+export const activateRouteWithStandbyCoverage = (
+  runCutDay,
+  standbyRunCutDayId,
+  standbyPulloutAddress
+) => {
   runCutDay.status = "active";
   runCutDay.disposition = STANDBY_DISPOSITION;
   runCutDay.dispositionSource = "standby";
   runCutDay.dispositionStandbyDay = standbyRunCutDayId;
+
+  if (standbyPulloutAddress !== undefined) {
+    const alreadyOwnedByThisStandby =
+      String(runCutDay.pulloutAddressStandbyDay || "") === String(standbyRunCutDayId);
+    if (!alreadyOwnedByThisStandby) {
+      runCutDay.pulloutAddressBeforeStandby = runCutDay.pulloutAddress || "";
+      runCutDay.pulloutAddressOverrideBeforeStandby = Boolean(runCutDay.overrides?.pulloutAddress);
+    }
+    runCutDay.pulloutAddress = standbyPulloutAddress || "";
+    runCutDay.pulloutAddressStandbyDay = standbyRunCutDayId;
+    if (runCutDay.overrides) runCutDay.overrides.pulloutAddress = true;
+  }
+};
+
+export const removeStandbyCoverageFromRoute = (runCutDay, standbyRunCutDayId) => {
+  let changed = false;
+  const standbyOwnsDisposition =
+    runCutDay.disposition === STANDBY_DISPOSITION &&
+    runCutDay.dispositionSource === "standby" &&
+    String(runCutDay.dispositionStandbyDay || "") === String(standbyRunCutDayId);
+  if (standbyOwnsDisposition) {
+    runCutDay.disposition = null;
+    runCutDay.dispositionSource = null;
+    runCutDay.dispositionStandbyDay = null;
+    changed = true;
+  }
+
+  const standbyOwnsPullout =
+    String(runCutDay.pulloutAddressStandbyDay || "") === String(standbyRunCutDayId);
+  if (standbyOwnsPullout) {
+    runCutDay.pulloutAddress = runCutDay.pulloutAddressBeforeStandby || "";
+    if (runCutDay.overrides) {
+      runCutDay.overrides.pulloutAddress = Boolean(runCutDay.pulloutAddressOverrideBeforeStandby);
+    }
+    runCutDay.pulloutAddressStandbyDay = null;
+    runCutDay.pulloutAddressBeforeStandby = "";
+    runCutDay.pulloutAddressOverrideBeforeStandby = false;
+    changed = true;
+  }
+
+  return changed;
 };
