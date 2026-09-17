@@ -130,11 +130,12 @@ test("Network Success assignment corrections are stored separately and audited",
   }
 });
 
-test("removing a confirmed submission deletes only its active entries and retains an audit", async () => {
+test("removing a confirmed submission permanently deletes its active entries and the submission record", async () => {
   const originals = {
     findSubmission: NetworkSubmission.findById,
     findEntries: NetworkKpiEntry.find,
     deleteEntries: NetworkKpiEntry.deleteMany,
+    deleteSubmission: NetworkSubmission.deleteOne,
   };
   const submission = {
     _id: "submission-1",
@@ -144,13 +145,14 @@ test("removing a confirmed submission deletes only its active entries and retain
     parsedRows: [{ id: "raw" }],
     previewRows: [{ id: "preview" }],
     changeAudit: [],
-    async save() {},
   };
   const entries = [{ _id: "entry-1", submission: "submission-1", date: "2026-09-08" }];
-  let deleteFilter = null;
+  let deleteEntriesFilter = null;
+  let deleteSubmissionFilter = null;
   NetworkSubmission.findById = async () => submission;
   NetworkKpiEntry.find = () => ({ lean: async () => entries });
-  NetworkKpiEntry.deleteMany = async (filter) => { deleteFilter = filter; return { deletedCount: 1 }; };
+  NetworkKpiEntry.deleteMany = async (filter) => { deleteEntriesFilter = filter; return { deletedCount: 1 }; };
+  NetworkSubmission.deleteOne = async (filter) => { deleteSubmissionFilter = filter; return { deletedCount: 1 }; };
   try {
     const res = response();
     await removeSubmission(
@@ -160,17 +162,15 @@ test("removing a confirmed submission deletes only its active entries and retain
       },
       res
     );
-    assert.deepEqual(deleteFilter, { submission: "submission-1" });
-    assert.equal(submission.status, "removed");
-    assert.equal(submission.changeAudit[0].action, "submission_removed");
-    assert.equal(submission.changeAudit[0].removedEntries.length, 1);
-    assert.deepEqual(submission.parsedRows, []);
-    assert.deepEqual(submission.previewRows, []);
+    assert.deepEqual(deleteEntriesFilter, { submission: "submission-1" });
+    assert.deepEqual(deleteSubmissionFilter, { _id: "submission-1" });
     assert.equal(res.body.removedEntries, 1);
+    assert.match(res.body.message, /permanently deleted/);
   } finally {
     NetworkSubmission.findById = originals.findSubmission;
     NetworkKpiEntry.find = originals.findEntries;
     NetworkKpiEntry.deleteMany = originals.deleteEntries;
+    NetworkSubmission.deleteOne = originals.deleteSubmission;
   }
 });
 

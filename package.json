@@ -16,6 +16,7 @@
     "test": "node --test",
     "migrate:assignment-rosters": "node scripts/migrations/backfillAssignmentRosters.js",
     "migrate:daily-issue-dedup": "node scripts/migrations/dedupeAutoIssues.js",
+    "migrate:delete-removed-submissions": "node scripts/migrations/deleteRemovedNetworkSubmissions.js",
     "maintenance:create-admin": "node scripts/maintenance/createAdminUser.js",
     "maintenance:verify-production": "node scripts/maintenance/verifyProductionReadiness.js"
   },

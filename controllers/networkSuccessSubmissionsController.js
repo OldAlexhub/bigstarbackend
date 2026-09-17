@@ -511,38 +511,22 @@ export const listSubmissions = async (req, res) => {
 };
 
 export const removeSubmission = async (req, res) => {
-  let submission = await NetworkSubmission.findById(req.params.id);
+  const submission = await NetworkSubmission.findById(req.params.id);
   const accessError = ensureSubmissionAccess(req, submission);
   if (accessError) return res.status(accessError.status).json({ message: accessError.message });
-  if (submission.status === "removed") return res.status(409).json({ message: "This submission has already been removed." });
 
   let activeEntries;
   try {
     await runInTransaction(async () => {
     const currentSubmission = await NetworkSubmission.findById(submission._id);
-    if (!currentSubmission || currentSubmission.status === "removed") {
+    if (!currentSubmission) {
       throw httpError(409, "This submission has already been removed.");
     }
-    submission = currentSubmission;
-    activeEntries = submission.status === "confirmed"
-      ? await NetworkKpiEntry.find({ submission: submission._id }).lean()
+    activeEntries = currentSubmission.status === "confirmed"
+      ? await NetworkKpiEntry.find({ submission: currentSubmission._id }).lean()
       : [];
-    if (activeEntries.length) await NetworkKpiEntry.deleteMany({ submission: submission._id });
-
-    const removedAt = new Date();
-    submission.changeAudit.push({
-      action: "submission_removed",
-      changedAt: removedAt,
-      changedBy: req.user._id,
-      previousStatus: submission.status,
-      removedEntries: activeEntries,
-    });
-    submission.status = "removed";
-    submission.removedAt = removedAt;
-    submission.removedBy = req.user._id;
-    submission.parsedRows = [];
-    submission.previewRows = [];
-    await submission.save();
+    if (activeEntries.length) await NetworkKpiEntry.deleteMany({ submission: currentSubmission._id });
+    await NetworkSubmission.deleteOne({ _id: currentSubmission._id });
     });
   } catch (error) {
     return respondToHttpError(error, res);
@@ -553,8 +537,8 @@ export const removeSubmission = async (req, res) => {
 
   res.json({
     message: activeEntries.length
-      ? "Submission and its active Network Success records were removed. You can upload the corrected files now."
-      : "Submission removed. You can upload the files again now.",
+      ? "Submission and its active Network Success records were permanently deleted. You can upload the corrected files now."
+      : "Submission permanently deleted. You can upload the files again now.",
     removedEntries: activeEntries.length,
   });
 };
