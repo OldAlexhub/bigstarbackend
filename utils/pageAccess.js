@@ -57,7 +57,7 @@ export const PAGE_ACCESS_GROUPS = [
   },
   {
     key: "executive_reporting",
-    pages: ["elt_reporting.operations_report", "leaderboard"],
+    pages: ["elt_reporting.operations_report", "report_builder", "leaderboard"],
   },
 ];
 

@@ -37,6 +37,7 @@ import safetyRoutes from "./routes/safetyRoutes.js";
 import operationsReportingRoutes from "./routes/operationsReportingRoutes.js";
 import reallocationRequestsRoutes from "./routes/reallocationRequestsRoutes.js";
 import teamPostsRoutes from "./routes/teamPostsRoutes.js";
+import reportBuilderRoutes from "./routes/reportBuilderRoutes.js";
 import { scheduleWeeklyFinalization } from "./jobs/finalizeWeeks.js";
 import { scheduleAssignmentRollover } from "./jobs/rolloverAssignments.js";
 import { scheduleOperationsReconciliation } from "./jobs/reconcileOperationsReporting.js";
@@ -101,6 +102,7 @@ app.use("/api/safety", safetyRoutes);
 app.use("/api/operations-reporting", operationsReportingRoutes);
 app.use("/api/reallocation-requests", reallocationRequestsRoutes);
 app.use("/api/team-posts", teamPostsRoutes);
+app.use("/api/report-builder", reportBuilderRoutes);
 
 let httpServer;
 let shuttingDown = false;

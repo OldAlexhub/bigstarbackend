@@ -83,9 +83,19 @@ const buildTrend = (from, to, allRunCutDays) => {
 
 // The full cross-division, cross-section rollup for one date window —
 // shared by the on-screen report and every export format.
-const computeReport = async (req, from, to, divisionIds) => {
+export const computeEltOperationsReport = async (req, from, to, divisionIds) => {
   const filter = { ...divisionFilter(req.user), active: true };
-  if (divisionIds?.length) filter._id = { $in: divisionIds };
+  if (divisionIds?.length) {
+    // Keep a requested subset inside the caller's division boundary. This
+    // matters for explicitly assigned reporting users; a query string must
+    // never be able to replace the access filter with an arbitrary ID list.
+    const accessibleIds = req.user.role === "ELT"
+      ? divisionIds
+      : divisionIds.filter((divisionId) =>
+        req.user.divisionAccess.some((allowedId) => String(allowedId) === String(divisionId))
+      );
+    filter._id = { $in: accessibleIds };
+  }
   const divisions = await Division.find(filter).sort({ code: 1 });
 
   const allRunCutDays = [];
@@ -211,8 +221,8 @@ export const getEltReport = async (req, res) => {
   const comparePrior = req.query.comparePrior !== "0";
 
   const [current, prior] = await Promise.all([
-    computeReport(req, fromDate, toDate, divisionIds),
-    comparePrior ? computeReport(req, priorFrom, priorTo, divisionIds) : Promise.resolve(null),
+    computeEltOperationsReport(req, fromDate, toDate, divisionIds),
+    comparePrior ? computeEltOperationsReport(req, priorFrom, priorTo, divisionIds) : Promise.resolve(null),
   ]);
 
   res.json({
@@ -280,7 +290,7 @@ export const exportEltReport = async (req, res) => {
   const { error, fromDate, toDate, divisionIds } = resolveRange(req.query);
   if (error) return res.status(400).json({ message: error });
 
-  const report = await computeReport(req, fromDate, toDate, divisionIds);
+  const report = await computeEltOperationsReport(req, fromDate, toDate, divisionIds);
   const rows = toRows(report);
   const format = ["xlsx", "csv", "pdf"].includes(req.query.format) ? req.query.format : "xlsx";
   const filenameBase = `ELT-Report-${report.from}-to-${report.to}`;
