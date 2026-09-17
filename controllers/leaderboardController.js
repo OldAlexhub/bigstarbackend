@@ -2,17 +2,18 @@ import PDFDocument from "pdfkit";
 import Division from "../models/Division.js";
 import RunCutDay from "../models/RunCutDay.js";
 import DailyIssueLog from "../models/DailyIssueLog.js";
-import { divisionFilter } from "../middleware/access.js";
 import { emptyMetrics, accumulate, coveragePct, runCutFulfillmentPct } from "../utils/weeklyMetrics.js";
 import { pdfPageLeft, drawPdfTable } from "../utils/pdfTable.js";
+import { filterLeaderboardRowsForUser, rankLeaderboardRows } from "../utils/leaderboard.js";
 
 const iso = (d) => new Date(d).toISOString().slice(0, 10);
 const round2 = (n) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 100) / 100);
 const roundFrac = (n) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 10000) / 10000);
 const fmtPct = (v) => (v == null ? "" : `${Math.round(v * 1000) / 10}%`);
 
-// Every division the requesting user can see, ranked by fulfillment — the
-// same two metrics (run cut / revenue hour fulfillment) ELT Reporting shows
+// Rank every active division before applying the requesting user's division
+// visibility. That keeps an authorized division's true company position.
+// The same two metrics (run cut / revenue hour fulfillment) ELT Reporting shows
 // per division, computed the same way from RunCutDay via weeklyMetrics.js.
 // Ranking key is the average of the two: a division that deploys every duty
 // but under-covers revenue hours (or vice versa) shouldn't outrank one that
@@ -20,8 +21,7 @@ const fmtPct = (v) => (v == null ? "" : `${Math.round(v * 1000) / 10}%`);
 // score, since more logged issues reflects tracking activity rather than
 // necessarily worse performance.
 const computeLeaderboard = async (req, from, to) => {
-  const filter = { ...divisionFilter(req.user), active: true };
-  const divisions = await Division.find(filter).sort({ code: 1 });
+  const divisions = await Division.find({ active: true }).sort({ code: 1 });
 
   const ranked = await Promise.all(
     divisions.map(async (division) => {
@@ -54,12 +54,13 @@ const computeLeaderboard = async (req, from, to) => {
     })
   );
 
-  ranked.sort((a, b) => (b.avgFulfillmentPct ?? -1) - (a.avgFulfillmentPct ?? -1));
-  ranked.forEach((d, i) => {
-    d.rank = i + 1;
-  });
-
-  return ranked;
+  const companyRanked = rankLeaderboardRows(ranked);
+  const visibleDivisions = filterLeaderboardRowsForUser(companyRanked, req.user);
+  return {
+    divisions: visibleDivisions,
+    totalDivisions: companyRanked.length,
+    isCompanyWide: visibleDivisions.length === companyRanked.length,
+  };
 };
 
 const resolveRange = (query) => {
@@ -72,15 +73,15 @@ export const getLeaderboard = async (req, res) => {
   const { error, from, to } = resolveRange(req.query);
   if (error) return res.status(400).json({ message: error });
 
-  const divisions = await computeLeaderboard(req, from, to);
-  res.json({ from: iso(from), to: iso(to), divisions });
+  const leaderboard = await computeLeaderboard(req, from, to);
+  res.json({ from: iso(from), to: iso(to), ...leaderboard });
 };
 
 export const exportLeaderboardPdf = async (req, res) => {
   const { error, from, to } = resolveRange(req.query);
   if (error) return res.status(400).json({ message: error });
 
-  const divisions = await computeLeaderboard(req, from, to);
+  const { divisions, totalDivisions, isCompanyWide } = await computeLeaderboard(req, from, to);
   const filenameBase = `Leaderboard-${iso(from)}-to-${iso(to)}`;
 
   res.setHeader("Content-Type", "application/pdf");
@@ -89,7 +90,10 @@ export const exportLeaderboardPdf = async (req, res) => {
   doc.pipe(res);
 
   doc.fontSize(18).text("Division Leaderboard", { align: "left" });
-  doc.fontSize(11).fillColor("#666").text(`Ranked by fulfillment — ${iso(from)} to ${iso(to)}`);
+  doc.fontSize(11).fillColor("#666").text(`Company-wide rank by fulfillment — ${iso(from)} to ${iso(to)}`);
+  if (!isCompanyWide) {
+    doc.fontSize(9).text(`Showing authorized divisions; ranks are among ${totalDivisions} active divisions.`);
+  }
   doc.moveDown();
 
   const pageLeft = pdfPageLeft(doc);

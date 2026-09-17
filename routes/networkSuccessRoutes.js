@@ -1,7 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { protect } from "../middleware/authMiddleware.js";
-import { requirePageAccess } from "../middleware/access.js";
+import { requirePageAccess, requirePageWrite } from "../middleware/access.js";
 import {
   confirmSubmission,
   getPerformance,
@@ -40,11 +40,11 @@ router.use(protect);
 router.get("/submissions", requirePageAccess("network_success.excel_submissions"), listSubmissions);
 router.get("/entries", requirePageAccess("network_success.excel_submissions"), listEntries);
 router.get("/performance", requirePageAccess("network_success.performance"), getPerformance);
-router.delete("/submissions/:id", requirePageAccess("network_success.excel_submissions"), removeSubmission);
-router.post("/submissions/:id/reopen", requirePageAccess("network_success.excel_submissions"), reopenSubmission);
-router.patch("/entries/:id/assignment", requirePageAccess("network_success.performance"), updatePerformanceAssignment);
-router.post("/submissions/preprocess", requirePageAccess("network_success.excel_submissions"), receiveWorkbooks, preprocessSubmission);
-router.post("/submissions/:id/preview", requirePageAccess("network_success.excel_submissions"), previewSubmission);
-router.post("/submissions/:id/confirm", requirePageAccess("network_success.excel_submissions"), confirmSubmission);
+router.delete("/submissions/:id", requirePageWrite("network_success.excel_submissions"), removeSubmission);
+router.post("/submissions/:id/reopen", requirePageWrite("network_success.excel_submissions"), reopenSubmission);
+router.patch("/entries/:id/assignment", requirePageWrite("network_success.performance"), updatePerformanceAssignment);
+router.post("/submissions/preprocess", requirePageWrite("network_success.excel_submissions"), receiveWorkbooks, preprocessSubmission);
+router.post("/submissions/:id/preview", requirePageWrite("network_success.excel_submissions"), previewSubmission);
+router.post("/submissions/:id/confirm", requirePageWrite("network_success.excel_submissions"), confirmSubmission);
 
 export default router;

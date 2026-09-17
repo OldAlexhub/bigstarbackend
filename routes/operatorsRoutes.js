@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireAnyPageAccess, requirePageAccess } from "../middleware/access.js";
+import { requireAnyPageAccess, requirePageWrite } from "../middleware/access.js";
 import {
   listOperators,
   createOperator,
@@ -22,8 +22,8 @@ const operatorPages = [
 ];
 
 router.get("/", requireAnyPageAccess(operatorPages), listOperators);
-router.post("/", requirePageAccess("master_run_cuts.drivers"), createOperator);
-router.patch("/:id", requirePageAccess("master_run_cuts.drivers"), updateOperator);
-router.delete("/:id", requirePageAccess("master_run_cuts.drivers"), deleteOperator);
+router.post("/", requirePageWrite("master_run_cuts.drivers"), createOperator);
+router.patch("/:id", requirePageWrite("master_run_cuts.drivers"), updateOperator);
+router.delete("/:id", requirePageWrite("master_run_cuts.drivers"), deleteOperator);
 
 export default router;

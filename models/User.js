@@ -79,6 +79,14 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    pageAccessLevels: {
+      type: [{
+        _id: false,
+        page: { type: String, enum: PAGE_ACCESS, required: true },
+        level: { type: String, enum: ["read", "write"], required: true },
+      }],
+      default: [],
+    },
     divisionAccess: {
       type: [mongoose.Schema.Types.ObjectId],
       ref: "Division",
@@ -113,6 +121,11 @@ userSchema.methods.toPublicJSON = function () {
     sections: this.sections,
     pageAccess: this.pageAccess,
     pageAccessConfigured: this.pageAccessConfigured,
+    pageAccessLevels: Array.isArray(this.pageAccessLevels)
+      ? Object.fromEntries(this.pageAccessLevels.map(({ page, level }) => [page, level]))
+      : this.pageAccessLevels instanceof Map
+        ? Object.fromEntries(this.pageAccessLevels)
+        : this.pageAccessLevels || {},
     divisionAccess: this.divisionAccess,
   };
 };

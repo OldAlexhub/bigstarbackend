@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireAnyPageAccess, requirePageAccess } from "../middleware/access.js";
+import { requireAnyPageAccess, requirePageAccess, requirePageWrite } from "../middleware/access.js";
 import {
   acceptReallocationRequest,
   acknowledgeReallocationNotifications,
@@ -21,7 +21,7 @@ router.get("/pending-notifications", requirePageAccess("deployment.receiving_req
 router.post("/acknowledge", requirePageAccess("network_success.reallocation_requests"), acknowledgeReallocationNotifications);
 router.get("/export", requireAnyPageAccess(requestPages), exportReallocationRequests);
 router.get("/", requireAnyPageAccess(requestPages), listReallocationRequests);
-router.post("/", requirePageAccess("network_success.reallocation_requests"), createReallocationRequest);
-router.post("/:id/accept", requirePageAccess("deployment.receiving_requests"), acceptReallocationRequest);
+router.post("/", requirePageWrite("network_success.reallocation_requests"), createReallocationRequest);
+router.post("/:id/accept", requirePageWrite("deployment.receiving_requests"), acceptReallocationRequest);
 
 export default router;

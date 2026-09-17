@@ -1,5 +1,9 @@
 import User, { ROLES, SECTIONS } from "../models/User.js";
-import { normalizePageAccess, sectionsForPageAccess } from "../utils/pageAccess.js";
+import {
+  normalizePageAccess,
+  normalizePageAccessLevels,
+  sectionsForPageAccess,
+} from "../utils/pageAccess.js";
 
 const duplicateMessage = (error) => {
   const field = Object.keys(error.keyPattern || {})[0] || "value";
@@ -9,6 +13,9 @@ const duplicateMessage = (error) => {
 const sanitizeSections = (sections) =>
   Array.isArray(sections) ? sections.filter((s) => SECTIONS.includes(s)) : undefined;
 
+const pageAccessLevelRecords = (levels) =>
+  Object.entries(levels || {}).map(([page, level]) => ({ page, level }));
+
 export const listUsers = async (req, res) => {
   const users = await User.find({})
     .populate({ path: "divisionAccess", select: "code name", match: { active: { $ne: false } } })
@@ -17,7 +24,7 @@ export const listUsers = async (req, res) => {
 };
 
 export const createUser = async (req, res) => {
-  const { username, password, name, email, phone, title, department, role, sections, pageAccess, divisionAccess } = req.body;
+  const { username, password, name, email, phone, title, department, role, sections, pageAccess, pageAccessLevels, divisionAccess } = req.body;
   if (!username || !password || !name) {
     return res.status(400).json({ message: "username, password, and name are required" });
   }
@@ -27,6 +34,12 @@ export const createUser = async (req, res) => {
 
   try {
     const normalizedPageAccess = normalizePageAccess(pageAccess);
+    const normalizedLevels = normalizePageAccessLevels(pageAccessLevels, normalizedPageAccess);
+    const effectiveLevels = normalizedPageAccess === undefined
+      ? {}
+      : normalizedLevels === undefined
+        ? Object.fromEntries(normalizedPageAccess.map((page) => [page, "write"]))
+        : Object.fromEntries(normalizedPageAccess.map((page) => [page, normalizedLevels[page] || "read"]));
     const user = await User.create({
       username,
       password,
@@ -39,6 +52,7 @@ export const createUser = async (req, res) => {
       sections: normalizedPageAccess !== undefined ? sectionsForPageAccess(normalizedPageAccess) : sanitizeSections(sections) || [],
       pageAccess: normalizedPageAccess || [],
       pageAccessConfigured: normalizedPageAccess !== undefined,
+      pageAccessLevels: pageAccessLevelRecords(effectiveLevels),
       divisionAccess: divisionAccess || [],
     });
     const populated = await user.populate({
@@ -57,7 +71,7 @@ export const updateUser = async (req, res) => {
   const user = await User.findById(req.params.id);
   if (!user) return res.status(404).json({ message: "User not found" });
 
-  const { password, name, email, phone, title, department, role, sections, pageAccess, divisionAccess, active } = req.body;
+  const { password, name, email, phone, title, department, role, sections, pageAccess, pageAccessLevels, divisionAccess, active } = req.body;
   if (role !== undefined) {
     if (!ROLES.includes(role)) return res.status(400).json({ message: `role must be one of: ${ROLES.join(", ")}` });
     user.role = role;
@@ -70,9 +84,19 @@ export const updateUser = async (req, res) => {
   if (department !== undefined) user.department = department;
   const normalizedPageAccess = normalizePageAccess(pageAccess);
   if (normalizedPageAccess !== undefined) {
+    const normalizedLevels = normalizePageAccessLevels(pageAccessLevels, normalizedPageAccess);
     user.pageAccess = normalizedPageAccess;
     user.pageAccessConfigured = true;
+    const effectiveLevels = normalizedLevels === undefined
+      ? Object.fromEntries(normalizedPageAccess.map((page) => [page, "write"]))
+      : Object.fromEntries(normalizedPageAccess.map((page) => [page, normalizedLevels[page] || "read"]));
+    user.pageAccessLevels = pageAccessLevelRecords(effectiveLevels);
     user.sections = sectionsForPageAccess(normalizedPageAccess);
+  } else if (pageAccessLevels !== undefined) {
+    const normalizedLevels = normalizePageAccessLevels(pageAccessLevels, user.pageAccess);
+    user.pageAccessLevels = pageAccessLevelRecords(Object.fromEntries(
+      (user.pageAccess || []).map((page) => [page, normalizedLevels?.[page] || "read"])
+    ));
   } else if (sections !== undefined) {
     user.sections = sanitizeSections(sections) || [];
   }

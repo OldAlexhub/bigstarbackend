@@ -3,7 +3,10 @@ import test from "node:test";
 import {
   PAGE_ACCESS,
   canAccessPage,
+  canWritePage,
   normalizePageAccess,
+  normalizePageAccessLevels,
+  pageAccessLevel,
   sectionsForPageAccess,
 } from "./pageAccess.js";
 
@@ -43,4 +46,48 @@ test("Report Builder is an independently assignable page permission", () => {
   assert.equal(canAccessPage(user, "report_builder"), true);
   assert.equal(canAccessPage(user, "elt_reporting.operations_report"), false);
   assert.equal(canAccessPage(user, "leaderboard"), false);
+});
+
+test("configured pages support read-only and read-and-write levels", () => {
+  const user = {
+    role: "Manager",
+    pageAccessConfigured: true,
+    pageAccess: ["deployment.issue_log", "report_builder"],
+    pageAccessLevels: {
+      "deployment.issue_log": "read",
+      report_builder: "write",
+    },
+  };
+
+  assert.equal(pageAccessLevel(user, "deployment.issue_log"), "read");
+  assert.equal(canWritePage(user, "deployment.issue_log"), false);
+  assert.equal(canWritePage(user, "report_builder"), true);
+  assert.equal(pageAccessLevel(user, "leaderboard"), null);
+
+  assert.equal(canWritePage({
+    ...user,
+    pageAccessLevels: [
+      { page: "deployment.issue_log", level: "read" },
+      { page: "report_builder", level: "write" },
+    ],
+  }, "deployment.issue_log"), false);
+});
+
+test("legacy assignments and configured pages without a saved level retain write access", () => {
+  assert.equal(canWritePage({ role: "Coordinator", sections: ["safety"] }, "safety.scores"), true);
+  assert.equal(canWritePage({
+    role: "Coordinator",
+    pageAccessConfigured: true,
+    pageAccess: ["safety.scores"],
+  }, "safety.scores"), true);
+});
+
+test("page access levels reject unknown pages and invalid levels", () => {
+  assert.deepEqual(
+    normalizePageAccessLevels(
+      { dashboard: "read", "safety.scores": "write", leaderboard: "owner", unknown: "write" },
+      ["dashboard", "safety.scores", "leaderboard"]
+    ),
+    { dashboard: "read", "safety.scores": "write" }
+  );
 });

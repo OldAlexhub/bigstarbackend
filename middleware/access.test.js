@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requireELT, requirePageAccess, requireSection } from "./access.js";
+import {
+  requireAnyPageWrite,
+  requireELT,
+  requirePageAccess,
+  requirePageWrite,
+  requireSection,
+} from "./access.js";
 
 const response = () => ({
   statusCode: 200,
@@ -57,5 +63,42 @@ test("legacy section assignments continue to allow all matching tabs", () => {
   const user = { role: "Coordinator", sections: ["safety"] };
   let allowed = false;
   requirePageAccess("safety.analytics")({ user }, response(), () => { allowed = true; });
+  assert.equal(allowed, true);
+});
+
+test("read-only access passes page viewing but blocks write middleware", () => {
+  const user = {
+    role: "Coordinator",
+    pageAccessConfigured: true,
+    pageAccess: ["deployment.issue_log"],
+    pageAccessLevels: { "deployment.issue_log": "read" },
+  };
+
+  let allowed = false;
+  requirePageAccess("deployment.issue_log")({ user }, response(), () => { allowed = true; });
+  assert.equal(allowed, true);
+
+  const denied = response();
+  requirePageWrite("deployment.issue_log")({ user }, denied, () => {});
+  assert.equal(denied.statusCode, 403);
+  assert.equal(denied.body.message, "Read & write access to this page is required");
+});
+
+test("any-page write middleware accepts one writable page", () => {
+  const user = {
+    role: "Coordinator",
+    pageAccessConfigured: true,
+    pageAccess: ["deployment.live_schedule", "deployment.schedule_history"],
+    pageAccessLevels: {
+      "deployment.live_schedule": "read",
+      "deployment.schedule_history": "write",
+    },
+  };
+  let allowed = false;
+  requireAnyPageWrite(["deployment.live_schedule", "deployment.schedule_history"])(
+    { user },
+    response(),
+    () => { allowed = true; }
+  );
   assert.equal(allowed, true);
 });

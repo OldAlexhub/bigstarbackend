@@ -62,6 +62,7 @@ export const PAGE_ACCESS_GROUPS = [
 ];
 
 export const PAGE_ACCESS = PAGE_ACCESS_GROUPS.flatMap((group) => group.pages);
+export const PAGE_ACCESS_LEVELS = ["read", "write"];
 
 const pageAccessSet = new Set(PAGE_ACCESS);
 const sectionNames = new Set([
@@ -80,6 +81,17 @@ export const sectionForPage = (page) => {
 
 export const normalizePageAccess = (pages) =>
   Array.isArray(pages) ? [...new Set(pages.filter((page) => pageAccessSet.has(page)))] : undefined;
+
+export const normalizePageAccessLevels = (levels, pages = PAGE_ACCESS) => {
+  if (levels === undefined) return undefined;
+  const source = levels instanceof Map ? Object.fromEntries(levels) : levels;
+  if (!source || typeof source !== "object" || Array.isArray(source)) return {};
+  const allowedPages = new Set(pages || []);
+  return Object.fromEntries(
+    Object.entries(source)
+      .filter(([page, level]) => allowedPages.has(page) && PAGE_ACCESS_LEVELS.includes(level))
+  );
+};
 
 export const sectionsForPageAccess = (pages) => [
   ...new Set((pages || []).map(sectionForPage).filter(Boolean)),
@@ -100,6 +112,26 @@ export const canAccessPage = (user, page) => {
   const section = sectionForPage(page);
   return Boolean(section && (user.sections || []).includes(section));
 };
+
+const storedPageAccessLevel = (user, page) => {
+  const levels = user?.pageAccessLevels;
+  if (levels instanceof Map) return levels.get(page);
+  if (Array.isArray(levels)) {
+    return levels.find((entry) => entry?.page === page)?.level;
+  }
+  return levels?.[page];
+};
+
+// Page-level access existed before read/write levels. Missing levels on an
+// already-authorized account therefore mean write access, preserving every
+// existing user's capabilities until an ELT administrator changes them.
+export const pageAccessLevel = (user, page) => {
+  if (!canAccessPage(user, page)) return null;
+  if (user.role === "ELT" || !user.pageAccessConfigured) return "write";
+  return storedPageAccessLevel(user, page) === "read" ? "read" : "write";
+};
+
+export const canWritePage = (user, page) => pageAccessLevel(user, page) === "write";
 
 export const canAccessAnyPage = (user, pages) => (pages || []).some((page) => canAccessPage(user, page));
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireAnyPageAccess, requirePageAccess } from "../middleware/access.js";
+import { requireAnyPageAccess, requireAnyPageWrite, requirePageWrite } from "../middleware/access.js";
 import {
   listRunCutDays,
   setRunCutDayDeployed,
@@ -21,9 +21,9 @@ const schedulePages = [
 ];
 
 router.get("/", requireAnyPageAccess(schedulePages), listRunCutDays);
-router.post("/", requirePageAccess("deployment.live_schedule"), createExtraRunCutDay);
-router.patch("/:id/deployed", requirePageAccess("deployment.live_schedule"), setRunCutDayDeployed);
-router.patch("/:id", requireAnyPageAccess(["deployment.live_schedule", "deployment.schedule_history"]), updateRunCutDayException);
-router.delete("/:id", requirePageAccess("deployment.live_schedule"), deleteExtraRunCutDay);
+router.post("/", requirePageWrite("deployment.live_schedule"), createExtraRunCutDay);
+router.patch("/:id/deployed", requirePageWrite("deployment.live_schedule"), setRunCutDayDeployed);
+router.patch("/:id", requireAnyPageWrite(["deployment.live_schedule", "deployment.schedule_history"]), updateRunCutDayException);
+router.delete("/:id", requirePageWrite("deployment.live_schedule"), deleteExtraRunCutDay);
 
 export default router;

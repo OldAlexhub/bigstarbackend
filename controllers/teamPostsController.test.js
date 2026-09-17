@@ -94,6 +94,36 @@ test("creating a post rejects a body over 120 characters before writing", async 
   }
 });
 
+test("read-only Posts access cannot create a team post", async () => {
+  const originalCreate = TeamPost.create;
+  let createCalled = false;
+  TeamPost.create = async () => { createCalled = true; };
+  try {
+    const res = response();
+    await createTeamPost({
+      user: {
+        _id: new mongoose.Types.ObjectId(),
+        role: "Coordinator",
+        pageAccessConfigured: true,
+        pageAccess: ["deployment.posts"],
+        pageAccessLevels: [{ page: "deployment.posts", level: "read" }],
+      },
+      body: {
+        division: String(new mongoose.Types.ObjectId()),
+        fromSection: "deployment",
+        purpose: "Update",
+        title: "Coverage",
+        body: "Route coverage update.",
+      },
+    }, res);
+    assert.equal(res.statusCode, 403);
+    assert.match(res.body.message, /read & write/i);
+    assert.equal(createCalled, false);
+  } finally {
+    TeamPost.create = originalCreate;
+  }
+});
+
 test("a Deployment post is routed to Network Success with its audit snapshot", async () => {
   const originalExists = Division.exists;
   const originalCreate = TeamPost.create;

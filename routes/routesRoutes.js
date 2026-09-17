@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { requireAnyPageAccess, requirePageAccess } from "../middleware/access.js";
+import { requireAnyPageAccess, requirePageWrite } from "../middleware/access.js";
 import {
   listRoutes,
   createRoute,
@@ -18,8 +18,8 @@ router.get("/", requireAnyPageAccess([
   "deployment.issue_log",
   "network_success.reallocation_requests",
 ]), listRoutes);
-router.post("/", requirePageAccess("master_run_cuts.run_cuts"), createRoute);
-router.patch("/:id", requirePageAccess("master_run_cuts.run_cuts"), updateRoute);
-router.delete("/:id", requirePageAccess("master_run_cuts.run_cuts"), deleteRoute);
+router.post("/", requirePageWrite("master_run_cuts.run_cuts"), createRoute);
+router.patch("/:id", requirePageWrite("master_run_cuts.run_cuts"), updateRoute);
+router.delete("/:id", requirePageWrite("master_run_cuts.run_cuts"), deleteRoute);
 
 export default router;

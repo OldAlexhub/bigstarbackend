@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import Division from "../models/Division.js";
 import TeamPost, { POST_SECTIONS } from "../models/TeamPost.js";
-import { canAccessDivision, canAccessPage, divisionFilter } from "../middleware/access.js";
+import { canAccessDivision, canAccessPage, canWritePage, divisionFilter } from "../middleware/access.js";
 
 const clean = (value) => String(value || "").trim();
 const otherSection = (section) => section === "network_success" ? "deployment" : "network_success";
@@ -9,6 +9,8 @@ const otherSection = (section) => section === "network_success" ? "deployment" :
 const postPage = (section) => `${section}.posts`;
 const validateSection = (user, section) =>
   POST_SECTIONS.includes(section) && canAccessPage(user, postPage(section));
+const validateWriteSection = (user, section) =>
+  POST_SECTIONS.includes(section) && canWritePage(user, postPage(section));
 
 const populatePost = (query) =>
   query
@@ -54,7 +56,7 @@ export const listTeamPosts = async (req, res) => {
 export const createTeamPost = async (req, res) => {
   const { division, fromSection } = req.body;
   if (!mongoose.isValidObjectId(division)) return res.status(400).json({ message: "Choose a division." });
-  if (!validateSection(req.user, fromSection)) return res.status(403).json({ message: "Access to the sending section is required." });
+  if (!validateWriteSection(req.user, fromSection)) return res.status(403).json({ message: "Read & write access to the sending section is required." });
   if (!canAccessDivision(req.user, division)) return res.status(403).json({ message: "No access to this division" });
 
   const purpose = clean(req.body.purpose);
@@ -86,7 +88,7 @@ export const createTeamPost = async (req, res) => {
 export const respondToTeamPost = async (req, res) => {
   const { section } = req.body;
   if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: "Invalid post." });
-  if (!validateSection(req.user, section)) return res.status(403).json({ message: "Access to the responding section is required." });
+  if (!validateWriteSection(req.user, section)) return res.status(403).json({ message: "Read & write access to the responding section is required." });
   const responseBody = clean(req.body.responseBody);
   if (!responseBody) return res.status(400).json({ message: "Enter a response." });
   if (responseBody.length > 120) return res.status(400).json({ message: "Response cannot exceed 120 characters." });
