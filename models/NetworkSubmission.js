@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const networkSubmissionSchema = new mongoose.Schema(
   {
-    source: { type: String, enum: ["vision", "ecolane"], required: true },
+    source: { type: String, enum: ["vision", "ecolane", "spare"], required: true },
     status: { type: String, enum: ["pending", "matched", "confirmed", "failed", "removed"], default: "pending" },
     files: [
       {

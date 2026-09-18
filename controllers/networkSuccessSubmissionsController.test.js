@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import mongoose from "mongoose";
+import DailyIssueLog from "../models/DailyIssueLog.js";
 import NetworkKpiEntry from "../models/NetworkKpiEntry.js";
+import NetworkRouteAlias from "../models/NetworkRouteAlias.js";
 import NetworkSubmission from "../models/NetworkSubmission.js";
 import Operator from "../models/Operator.js";
 import Provider from "../models/Provider.js";
+import Route from "../models/Route.js";
 import RunCut from "../models/RunCut.js";
-import { removeSubmission, reopenSubmission, updatePerformanceAssignment } from "./networkSuccessSubmissionsController.js";
+import RunCutDay from "../models/RunCutDay.js";
+import {
+  previewSubmission,
+  removeSubmission,
+  reopenSubmission,
+  updatePerformanceAssignment,
+} from "./networkSuccessSubmissionsController.js";
 
 const transaction = mongoose.connection.transaction;
 test.beforeEach(() => {
@@ -223,5 +232,167 @@ test("opening a confirmed submission creates one editable revision and preserves
     NetworkSubmission.findById = originals.findSubmission;
     NetworkSubmission.findOne = originals.findRevision;
     NetworkSubmission.create = originals.createSubmission;
+  }
+});
+
+const emptyLeanChain = () => ({ lean: async () => [] });
+
+test("Spare submissions auto-create unmatched routes as extra revenue routes instead of blocking", async () => {
+  const originals = {
+    findSubmission: NetworkSubmission.findById,
+    findRoutes: Route.find,
+    findOneRoute: Route.findOne,
+    createRoute: Route.create,
+    findAliases: NetworkRouteAlias.find,
+    findRunCutDays: RunCutDay.find,
+    findIssues: DailyIssueLog.find,
+    findOperators: Operator.find,
+    findRunCuts: RunCut.find,
+    findKpiEntries: NetworkKpiEntry.find,
+  };
+  const submission = {
+    _id: "submission-1",
+    source: "spare",
+    status: "pending",
+    division: null,
+    createdBy: "user-1",
+    parsedRows: [
+      {
+        id: "spare-2",
+        sourceRow: 2,
+        date: "2026-09-10",
+        sourceRoute: "555",
+        sourceOperator: null,
+        completedTrips: 5,
+        reportedServiceHours: 4,
+        reportedRevenueHours: 3.5,
+        tpsh: null,
+        otpPct: 92,
+        zeroTrips: false,
+        sourceFields: {},
+      },
+    ],
+    blockedDates: [],
+    reportDates: ["2026-09-10"],
+    warnings: [],
+    counts: { sourceRows: 1, zeroTripRows: 0 },
+    async save() {},
+  };
+  let createdRoutePayload = null;
+  NetworkSubmission.findById = async () => submission;
+  Route.find = () => ({ sort: () => emptyLeanChain() });
+  Route.findOne = async () => null;
+  Route.create = async (payload) => {
+    createdRoutePayload = payload;
+    return { _id: "route-new-1", division: payload.division, code: payload.code, type: "revenue" };
+  };
+  NetworkRouteAlias.find = () => emptyLeanChain();
+  RunCutDay.find = () => ({ populate: () => emptyLeanChain() });
+  DailyIssueLog.find = () => emptyLeanChain();
+  Operator.find = () => ({ populate: () => emptyLeanChain() });
+  RunCut.find = () => ({ populate: () => emptyLeanChain() });
+  NetworkKpiEntry.find = () => ({ select: () => emptyLeanChain() });
+  try {
+    const res = response();
+    await previewSubmission(
+      {
+        user: { _id: "user-1", role: "ELT", divisionAccess: [] },
+        params: { id: "submission-1" },
+        body: { division: "division-1" },
+      },
+      res
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(createdRoutePayload.division, "division-1");
+    assert.equal(createdRoutePayload.code, "555");
+    assert.equal(res.body.rows.length, 1);
+    const [row] = res.body.rows;
+    assert.equal(row.matchMethod, "extra_revenue_route");
+    assert.equal(row.severity, "extra");
+    assert.equal(row.matchedRouteId, "route-new-1");
+    assert.equal(row.matchedRoute, "555");
+    assert.match(row.matchReason, /added as a one-off extra revenue route/);
+    assert.equal(submission.status, "matched");
+  } finally {
+    NetworkSubmission.findById = originals.findSubmission;
+    Route.find = originals.findRoutes;
+    Route.findOne = originals.findOneRoute;
+    Route.create = originals.createRoute;
+    NetworkRouteAlias.find = originals.findAliases;
+    RunCutDay.find = originals.findRunCutDays;
+    DailyIssueLog.find = originals.findIssues;
+    Operator.find = originals.findOperators;
+    RunCut.find = originals.findRunCuts;
+    NetworkKpiEntry.find = originals.findKpiEntries;
+  }
+});
+
+test("Vision submissions still require manual review for unmatched routes instead of auto-creating them", async () => {
+  const originals = {
+    findSubmission: NetworkSubmission.findById,
+    findRoutes: Route.find,
+    createRoute: Route.create,
+    findAliases: NetworkRouteAlias.find,
+    findKpiEntries: NetworkKpiEntry.find,
+  };
+  const submission = {
+    _id: "submission-2",
+    source: "vision",
+    status: "pending",
+    division: null,
+    createdBy: "user-1",
+    parsedRows: [
+      {
+        id: "vision-2",
+        sourceRow: 2,
+        date: "2026-09-10",
+        sourceRoute: "999",
+        sourceOperator: "Some Operator",
+        completedTrips: 5,
+        reportedServiceHours: 4,
+        reportedRevenueHours: 3.5,
+        tpsh: 1.25,
+        otpPct: 92,
+        zeroTrips: false,
+        sourceFields: {},
+      },
+    ],
+    blockedDates: [],
+    reportDates: ["2026-09-10"],
+    warnings: [],
+    counts: { sourceRows: 1, zeroTripRows: 0 },
+    async save() {},
+  };
+  let routeCreated = false;
+  NetworkSubmission.findById = async () => submission;
+  Route.find = () => ({ sort: () => emptyLeanChain() });
+  Route.create = async (payload) => {
+    routeCreated = true;
+    return { _id: "route-new-2", ...payload };
+  };
+  NetworkRouteAlias.find = () => emptyLeanChain();
+  NetworkKpiEntry.find = () => ({ select: () => emptyLeanChain() });
+  try {
+    const res = response();
+    await previewSubmission(
+      {
+        user: { _id: "user-1", role: "ELT", divisionAccess: [] },
+        params: { id: "submission-2" },
+        body: { division: "division-1" },
+      },
+      res
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(routeCreated, false);
+    const [row] = res.body.rows;
+    assert.equal(row.matchedRouteId, null);
+    assert.equal(row.matchMethod, "unmatched");
+    assert.equal(row.severity, "blocker");
+  } finally {
+    NetworkSubmission.findById = originals.findSubmission;
+    Route.find = originals.findRoutes;
+    Route.create = originals.createRoute;
+    NetworkRouteAlias.find = originals.findAliases;
+    NetworkKpiEntry.find = originals.findKpiEntries;
   }
 });

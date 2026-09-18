@@ -90,7 +90,7 @@ export const REPORT_SOURCES = {
   network_raw: {
     key: "network_raw",
     label: "Network Success raw performance",
-    description: "One row per confirmed source row from Vision or Ecolane, without rollups, scoring, or analysis.",
+    description: "One row per confirmed source row from Vision, Ecolane, or Spare, without rollups, scoring, or analysis.",
     fields: NETWORK_RAW_FIELDS,
     defaultFields: [
       "divisionName",
@@ -143,7 +143,7 @@ export const normalizeReportBuilderConfig = (query = {}) => {
       ? query.focus
       : "all",
     issueType: issueFilterValues.has(query.issueType) ? query.issueType : "all",
-    networkSource: ["all", "vision", "ecolane"].includes(query.networkSource) ? query.networkSource : "all",
+    networkSource: ["all", "vision", "ecolane", "spare"].includes(query.networkSource) ? query.networkSource : "all",
     sort,
     direction: query.direction === "desc" ? "desc" : "asc",
     title: safeString(query.title, 80) || (

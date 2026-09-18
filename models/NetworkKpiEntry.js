@@ -34,7 +34,7 @@ const assignmentOverrideSchema = new mongoose.Schema(
 const networkKpiEntrySchema = new mongoose.Schema(
   {
     division: { type: mongoose.Schema.Types.ObjectId, ref: "Division", required: true },
-    source: { type: String, enum: ["vision", "ecolane"], required: true },
+    source: { type: String, enum: ["vision", "ecolane", "spare"], required: true },
     date: { type: String, required: true },
     route: { type: mongoose.Schema.Types.ObjectId, ref: "Route", required: true },
     submission: { type: mongoose.Schema.Types.ObjectId, ref: "NetworkSubmission", required: true },

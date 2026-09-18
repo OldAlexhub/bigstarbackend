@@ -3,6 +3,7 @@ import test from "node:test";
 import XLSX from "xlsx";
 import { parseVisionReport } from "./parseVisionReport.js";
 import { parseEcolaneReports } from "./parseEcolaneReports.js";
+import { parseSpareReport } from "./parseSpareReport.js";
 import { aggregateResolvedRows } from "./aggregateRows.js";
 import { normalizeRouteCode, resolveRoute } from "./routeMatching.js";
 import { enrichGroup, resolvePerformanceRunCut, withPerformanceAssignment } from "../../controllers/networkSuccessSubmissionsController.js";
@@ -73,6 +74,51 @@ test("Vision parser keeps older reports usable when Revenue Hours is absent", ()
 
   assert.equal(parsed.rows[0].reportedRevenueHours, null);
   assert.match(parsed.warnings.join(" "), /Actual Revenue Hour Fulfillment will be unavailable/);
+});
+
+test("Spare parser reads duty performance metrics, dates, and zero-trip rows from a workbook grid", () => {
+  const header = [
+    "duty_report__duty_identifier",
+    "duty_report__start_requested_time_day",
+    "request__completed_count",
+    "duty_report__total_revenue_hours_sum",
+    "duty_report__total_scheduled_hours_sum",
+    "request__relevant_otp_rate",
+  ];
+  const positive = ["500B", "2026-08-01 00:00:00", 11, 8.418611111111112, 9, 100];
+  const zero = ["504", "2026-08-03 00:00:00", 0, 0, 0, 0];
+  const parsed = parseSpareReport(workbook([header, positive, zero]));
+
+  assert.equal(parsed.costCenter, null);
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].date, "2026-08-01");
+  assert.equal(parsed.rows[0].sourceRoute, "500B");
+  assert.equal(parsed.rows[0].completedTrips, 11);
+  assert.equal(parsed.rows[0].reportedRevenueHours, 8.418611111111112);
+  assert.equal(parsed.rows[0].reportedServiceHours, 9);
+  assert.equal(parsed.rows[0].otpPct, 1);
+  assert.equal(parsed.rows[0].tpsh, 1.22);
+  assert.equal(parsed.rows[1].zeroTrips, true);
+  assert.equal(parsed.rows[1].otpPct, 0);
+  assert.equal(parsed.rows[1].tpsh, null);
+});
+
+test("Spare parser reads a real CSV buffer directly, not just a converted workbook", () => {
+  const csv = [
+    "duty_report__duty_identifier,duty_report__start_requested_time_day,request__completed_count,duty_report__total_revenue_hours_sum,duty_report__total_scheduled_hours_sum,request__relevant_otp_rate",
+    "510B,2026-08-02 00:00:00,8,8.363611111111112,10,100",
+    "511A,2026-08-03 00:00:00,11,7.437222222222222,9,90.9090909090909",
+  ].join("\n");
+
+  const parsed = parseSpareReport(Buffer.from(csv, "utf8"));
+
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].sourceRoute, "510B");
+  assert.equal(parsed.rows[0].date, "2026-08-02");
+  assert.equal(parsed.rows[0].completedTrips, 8);
+  assert.equal(parsed.rows[0].tpsh, 0.8);
+  assert.equal(parsed.rows[1].tpsh, 1.22);
+  assert.ok(Math.abs(parsed.rows[1].otpPct - 0.909090909090909) < 1e-9);
 });
 
 test("Ecolane parser handles repeated headers and blocks an incomplete whole date", () => {
@@ -159,6 +205,31 @@ test("enrichment keeps unknown late values null and reports active zero-trip con
   });
   assert.equal(conflict.deployment.lateToFirst, 0);
   assert.equal(conflict.zeroTrip.deploymentConflict, true);
+});
+
+test("enrichment falls back to Master Run Cuts' standing service/revenue hours when there is no dated Deployment record", () => {
+  const base = {
+    date: "2026-09-01",
+    routeId: "r1",
+    routeCode: "R1",
+    routeType: "standard",
+    components: [{ sourceOperator: null }],
+    zeroTrip: { classification: "operated", zeroComponentCount: 0 },
+  };
+  const withMasterRunCut = enrichGroup(base, {
+    runDays: new Map(),
+    issues: new Map(),
+    operators: [],
+    runCuts: new Map([["r1", { serviceHours: 12, revenueHours: 10, operator: null }]]),
+  });
+  assert.equal(withMasterRunCut.deployment.scheduledServiceHours, 12);
+  assert.equal(withMasterRunCut.deployment.scheduledRevenueHours, 10);
+  assert.equal(withMasterRunCut.deployment.provenance.scheduledHours, "master_run_cuts");
+  assert.match(withMasterRunCut.deployment.warning, /Master Run Cuts standing value/);
+
+  const withoutEither = enrichGroup(base, { runDays: new Map(), issues: new Map(), operators: [] });
+  assert.equal(withoutEither.deployment.scheduledServiceHours, null);
+  assert.equal(withoutEither.deployment.provenance.scheduledHours, "unavailable");
 });
 
 test("replacement planning is idempotent and identifies removed active records", () => {

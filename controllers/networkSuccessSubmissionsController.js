@@ -13,6 +13,7 @@ import NetworkRouteAlias from "../models/NetworkRouteAlias.js";
 import { canAccessDivision, divisionFilter } from "../middleware/access.js";
 import { parseVisionReport } from "../utils/networkSuccess/parseVisionReport.js";
 import { parseEcolaneReports } from "../utils/networkSuccess/parseEcolaneReports.js";
+import { parseSpareReport } from "../utils/networkSuccess/parseSpareReport.js";
 import { aggregateResolvedRows } from "../utils/networkSuccess/aggregateRows.js";
 import {
   divisionMatchScores,
@@ -20,12 +21,13 @@ import {
   resolveRoute,
 } from "../utils/networkSuccess/routeMatching.js";
 import { normalizePersonName } from "../utils/networkSuccess/reportParsing.js";
+import { resolveRoute as resolveOrCreateRouteByCode } from "../utils/resolveAssignment.js";
 import { planReplacement } from "../utils/networkSuccess/replacementPlan.js";
 import { buildPerformanceAnalysis } from "../utils/networkSuccess/performanceAnalysis.js";
 import { runInTransaction } from "../utils/transaction.js";
 import { httpError, respondToHttpError } from "../utils/httpError.js";
 
-const issueRank = { blocker: 0, warning: 1, clean: 2 };
+const issueRank = { blocker: 0, warning: 1, extra: 2, clean: 3 };
 const fileMetadata = (file, kind) => ({
   kind,
   name: file.originalname,
@@ -130,7 +132,9 @@ export const enrichGroup = (group, context) => {
         ? "Partially closed"
         : runDay?.disposition || (runDay?.status === "active" ? "Operated" : runDay?.status || "Operated");
   const warning = !runDay
-    ? "No dated Deployment record; unavailable scheduled and late-event values remain blank."
+    ? masterRunCut
+      ? "No dated Deployment record; scheduled hours use the Master Run Cuts standing value, and late-event values remain blank."
+      : "No dated Deployment record; unavailable scheduled and late-event values remain blank."
     : null;
   const assignmentWarning = !operator
     ? "Master Run Cuts has no operator assigned to this route."
@@ -155,8 +159,8 @@ export const enrichGroup = (group, context) => {
       operatorName: operator?.name || group.components.find((row) => row.sourceOperator)?.sourceOperator || null,
       provider: id(provider),
       providerName: provider?.name || null,
-      scheduledServiceHours: runDay?.serviceHours ?? null,
-      scheduledRevenueHours: runDay?.revenueHours ?? null,
+      scheduledServiceHours: runDay?.serviceHours ?? masterRunCut?.serviceHours ?? null,
+      scheduledRevenueHours: runDay?.revenueHours ?? masterRunCut?.revenueHours ?? null,
       status: runDay?.status ?? null,
       disposition: runDay?.disposition ?? null,
       lateToFirst,
@@ -176,7 +180,7 @@ export const enrichGroup = (group, context) => {
           : provider
             ? "operator_directory"
             : "unavailable",
-        scheduledHours: runDay ? "deployment" : "unavailable",
+        scheduledHours: runDay ? "deployment" : masterRunCut ? "master_run_cuts" : "unavailable",
         status: runDay ? "deployment" : "unavailable",
         disposition: runDay ? "deployment" : "unavailable",
         lateEvents: runDay ? "deployment_issue_log" : "unavailable",
@@ -188,9 +192,11 @@ export const enrichGroup = (group, context) => {
 };
 
 const previewRow = (row, routeResult, blocked, enrichment) => {
+  const isExtraRevenueRoute = routeResult.method === "extra_revenue_route";
   const blocker = blocked || !routeResult.route;
   const warning =
     !blocker &&
+    !isExtraRevenueRoute &&
     (enrichment?.deployment.warning ||
       enrichment?.zeroTrip.deploymentConflict ||
       row.zeroTrips ||
@@ -212,10 +218,12 @@ const previewRow = (row, routeResult, blocked, enrichment) => {
               ? "Multiple safe candidates; review required"
               : routeResult.method === "suggestion_only"
                 ? "Close candidates are suggestions only"
-                : "No safe route match",
+                : isExtraRevenueRoute
+                  ? "No existing route matched; added as a one-off extra revenue route"
+                  : "No safe route match",
     suggestions: routeResult.suggestions || [],
     blockedDate: blocked,
-    severity: blocker ? "blocker" : warning ? "warning" : "clean",
+    severity: blocker ? "blocker" : isExtraRevenueRoute ? "extra" : warning ? "warning" : "clean",
     operatorName: enrichment?.deployment.operatorName || row.sourceOperator || null,
     providerName: enrichment?.deployment.providerName || null,
     operationalOutcome: enrichment?.operationalOutcome || (row.zeroTrips ? "Closed/cancelled — unverified" : "Awaiting route match"),
@@ -226,27 +234,33 @@ const previewRow = (row, routeResult, blocked, enrichment) => {
 
 export const preprocessSubmission = async (req, res) => {
   const source = String(req.body.source || "").toLowerCase();
-  if (!['vision', 'ecolane'].includes(source)) return res.status(400).json({ message: "Choose Vision or Ecolane." });
+  if (!["vision", "ecolane", "spare"].includes(source)) {
+    return res.status(400).json({ message: "Choose Vision, Ecolane, or Spare." });
+  }
   const visionFile = req.files?.vision?.[0];
   const productivityFile = req.files?.productivity?.[0];
   const driverFile = req.files?.driverPerformance?.[0];
+  const spareFile = req.files?.spare?.[0];
   if (source === "vision" && !visionFile) return res.status(400).json({ message: "Upload one Vision workbook." });
-  if (source === "vision" && (productivityFile || driverFile)) {
+  if (source === "vision" && (productivityFile || driverFile || spareFile)) {
     return res.status(400).json({ message: "Vision submissions accept only the Paratransit Operations workbook." });
   }
   if (source === "ecolane" && (!productivityFile || !driverFile)) {
     return res.status(400).json({ message: "Upload both Daily Run Productivity and Driver Performance workbooks." });
   }
-  if (source === "ecolane" && visionFile) {
+  if (source === "ecolane" && (visionFile || spareFile)) {
     return res.status(400).json({ message: "Ecolane submissions accept only the two required Ecolane workbooks." });
+  }
+  if (source === "spare" && !spareFile) return res.status(400).json({ message: "Upload one Spare Daily Duty Performance file." });
+  if (source === "spare" && (visionFile || productivityFile || driverFile)) {
+    return res.status(400).json({ message: "Spare submissions accept only the Daily Duty Performance file." });
   }
 
   let parsed;
   try {
-    parsed =
-      source === "vision"
-        ? parseVisionReport(visionFile.buffer)
-        : parseEcolaneReports(productivityFile.buffer, driverFile.buffer);
+    if (source === "vision") parsed = parseVisionReport(visionFile.buffer);
+    else if (source === "ecolane") parsed = parseEcolaneReports(productivityFile.buffer, driverFile.buffer);
+    else parsed = parseSpareReport(spareFile.buffer);
   } catch (error) {
     return res.status(400).json({ message: error.message || "The workbook could not be parsed." });
   }
@@ -254,10 +268,10 @@ export const preprocessSubmission = async (req, res) => {
   const divisions = await Division.find({ ...divisionFilter(req.user), active: true }).sort({ code: 1 }).lean();
   const routes = await Route.find({ division: { $in: divisions.map((division) => division._id) }, active: true }).lean();
   const candidates = divisionMatchScores(parsed.rows, divisions, routes, parsed.costCenter);
-  const files =
-    source === "vision"
-      ? [fileMetadata(visionFile, "vision")]
-      : [fileMetadata(productivityFile, "productivity"), fileMetadata(driverFile, "driverPerformance")];
+  let files;
+  if (source === "vision") files = [fileMetadata(visionFile, "vision")];
+  else if (source === "ecolane") files = [fileMetadata(productivityFile, "productivity"), fileMetadata(driverFile, "driverPerformance")];
+  else files = [fileMetadata(spareFile, "spare")];
   const reportDates = [...new Set(parsed.rows.map((row) => row.date))].sort();
   const submission = await NetworkSubmission.create({
     source,
@@ -291,6 +305,25 @@ export const previewSubmission = async (req, res) => {
     NetworkRouteAlias.find({ division, source: submission.source }).lean(),
   ]);
   const preliminary = submission.parsedRows.map((row) => ({ row, result: resolveRoute(row.sourceRoute, routes, aliases) }));
+
+  // Spare has no persistent route roster of its own to match against, so a
+  // route it reports that BigStar doesn't already recognize is most likely a
+  // genuine one-off run — the same idea as Live Schedule's Add Revenue
+  // Route — not a data-entry mismatch. Create it automatically instead of
+  // blocking the reviewer to manually map or exclude it. An "ambiguous"
+  // result is left alone either way: a matching route likely does exist,
+  // just unclear which one, so that genuinely needs a human to pick.
+  // Vision/Ecolane keep the existing manual-review requirement unchanged.
+  if (submission.source === "spare") {
+    for (const entry of preliminary) {
+      if (entry.result.route || !["unmatched", "suggestion_only"].includes(entry.result.method)) continue;
+      const created = await resolveOrCreateRouteByCode(division, entry.row.sourceRoute);
+      if (!created) continue;
+      if (!routes.some((route) => String(route._id) === String(created._id))) routes.push(created);
+      entry.result = { route: created, method: "extra_revenue_route", suggestions: [] };
+    }
+  }
+
   const matchedForEnrichment = preliminary
     .filter(({ result }) => result.route)
     .map(({ row, result }) => ({ ...row, routeId: id(result.route), routeCode: result.route.code, routeType: result.route.type }));
@@ -499,7 +532,7 @@ export const listSubmissions = async (req, res) => {
     if (!canAccessDivision(req.user, req.query.division)) return res.status(403).json({ message: "No access to this division" });
     filter.division = req.query.division;
   }
-  if (req.query.source && ["vision", "ecolane"].includes(req.query.source)) filter.source = req.query.source;
+  if (req.query.source && ["vision", "ecolane", "spare"].includes(req.query.source)) filter.source = req.query.source;
   const submissions = await NetworkSubmission.find(filter)
     .select("-parsedRows -previewRows -changeAudit")
     .populate("division", "code name")
@@ -611,7 +644,7 @@ export const listEntries = async (req, res) => {
   if (!division) return res.status(400).json({ message: "division is required" });
   if (!canAccessDivision(req.user, division)) return res.status(403).json({ message: "No access to this division" });
   const filter = { division };
-  if (source && ["vision", "ecolane"].includes(source)) filter.source = source;
+  if (source && ["vision", "ecolane", "spare"].includes(source)) filter.source = source;
   if (from || to) filter.date = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
   if (provider) filter["deployment.providerName"] = { $regex: provider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
   const entries = await NetworkKpiEntry.find(filter)
@@ -686,7 +719,7 @@ export const getPerformance = async (req, res) => {
   if (!canAccessDivision(req.user, division)) return res.status(403).json({ message: "No access to this division" });
   if (from && to && from > to) return res.status(400).json({ message: "From date must be on or before To date." });
   const filter = { division };
-  if (source && ["vision", "ecolane"].includes(source)) filter.source = source;
+  if (source && ["vision", "ecolane", "spare"].includes(source)) filter.source = source;
   if (from || to) filter.date = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
   const [entries, runCuts, oldest, newest] = await Promise.all([
     NetworkKpiEntry.find(filter).populate("route", "code type").sort({ date: 1, route: 1 }).lean(),
