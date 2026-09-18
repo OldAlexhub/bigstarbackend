@@ -24,19 +24,49 @@ const runCutDaySchema = new mongoose.Schema(
       ref: "Operator",
       default: null,
     },
+    // When standby coverage temporarily supplies this route's operator,
+    // retain the route-day value that was replaced so removing or moving
+    // that coverage can restore it without losing a manual override.
+    operatorStandbyDay: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RunCutDay",
+      default: null,
+    },
+    operatorBeforeStandby: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Operator",
+      default: null,
+    },
+    operatorOverrideBeforeStandby: {
+      type: Boolean,
+      default: false,
+    },
     vehicle: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Vehicle",
       default: null,
+    },
+    // Same idea as operatorStandbyDay, for the vehicle field.
+    vehicleStandbyDay: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "RunCutDay",
+      default: null,
+    },
+    vehicleBeforeStandby: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Vehicle",
+      default: null,
+    },
+    vehicleOverrideBeforeStandby: {
+      type: Boolean,
+      default: false,
     },
     pulloutAddress: {
       type: String,
       trim: true,
       default: "",
     },
-    // When standby coverage temporarily supplies this route's pullout
-    // address, retain the route-day value that was replaced so removing or
-    // moving that coverage can restore it without losing a manual override.
+    // Same idea as operatorStandbyDay, for the pullout address field.
     pulloutAddressStandbyDay: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "RunCutDay",

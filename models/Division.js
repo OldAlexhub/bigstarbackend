@@ -41,6 +41,19 @@ const divisionSchema = new mongoose.Schema(
       breakMinutes: { type: Number, default: null },
       revenueRatio: { type: Number, default: null },
     },
+    // Division-specific handling for how a standby's coverage of a route
+    // here affects pullout address — off by default (a standby's own
+    // address is normally the right one to show). Turn standbyKeepsRouteAddress
+    // on for a division whose pullout addresses are tied to the route
+    // itself rather than to whichever driver is on it (e.g. Division 3
+    // GoLink), so standby coverage doesn't overwrite it. editableInLiveSchedule
+    // is independent: it lets Deployment correct a route's pullout address
+    // directly in Live Schedule's today/tomorrow table, not just through the
+    // OSR Planner or a Permanent OSR.
+    pulloutAddressRules: {
+      standbyKeepsRouteAddress: { type: Boolean, default: false },
+      editableInLiveSchedule: { type: Boolean, default: false },
+    },
   },
   { timestamps: true }
 );

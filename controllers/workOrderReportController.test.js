@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import ExcelJS from "exceljs";
 import RunCutDay from "../models/RunCutDay.js";
+import RunCut from "../models/RunCut.js";
 import Division from "../models/Division.js";
 import { getWorkOrderReport } from "./workOrderReportController.js";
 
@@ -22,13 +23,15 @@ const chainable = (result) => {
 
 const divisionId = "division-1";
 
-const withMocks = async (days, work) => {
+const withMocks = async (days, work, divisionOverrides = {}, masterRunCuts = []) => {
   const originalFind = RunCutDay.find;
   const originalFindDivision = Division.findById;
+  const originalRunCutFind = RunCut.find;
   RunCutDay.find = () => chainable(days);
+  RunCut.find = () => ({ lean: async () => masterRunCuts });
   Division.findById = (id) => ({
     select: () => {
-      const result = { _id: id, code: "DIV_5", name: "Division Five", active: true };
+      const result = { _id: id, code: "DIV_5", name: "Division Five", active: true, ...divisionOverrides };
       return { lean: async () => result, then: (resolve) => resolve(result) };
     },
   });
@@ -37,6 +40,7 @@ const withMocks = async (days, work) => {
   } finally {
     RunCutDay.find = originalFind;
     Division.findById = originalFindDivision;
+    RunCut.find = originalRunCutFind;
   }
 };
 
@@ -165,4 +169,88 @@ test("a covered route reports the covering standby's assignment and pullout", as
     assert.equal(sunday.getRow(2).getCell(6).value, "4585");
     assert.equal(sunday.getRow(2).getCell(11).value, "Covered by standby STBY 203");
   });
+});
+
+test("a division that keeps its own pullout address prints its route's address even while covered", async () => {
+  const days = [
+    day({
+      route: { _id: "route-204", code: "204", type: "standard" },
+      status: "unassigned",
+      operator: null,
+      vehicle: null,
+      pulloutAddress: "GoLink's own stop",
+      clientNotes: "",
+    }),
+    day({
+      route: { _id: "route-stby203", code: "STBY 203", type: "standby" },
+      operator: { name: "Antoine Fowler" },
+      vehicle: { code: "4585" },
+      pulloutAddress: "1586 Sunnyvale Ave.",
+      startTime: "06:30",
+      endTime: "16:30",
+      deployed: true,
+      coveringRoute: { _id: "route-204", code: "204" },
+    }),
+  ];
+
+  await withMocks(
+    days,
+    async () => {
+      const res = response();
+      await getWorkOrderReport(
+        { user: { role: "ELT", divisionAccess: [] }, query: { division: divisionId, from: "2026-09-13" } },
+        res
+      );
+
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(res.body);
+      const sunday = workbook.getWorksheet("SUN");
+
+      assert.equal(sunday.getRow(2).getCell(5).value, "Antoine Fowler");
+      assert.equal(sunday.getRow(2).getCell(7).value, "GoLink's own stop");
+    },
+    { pulloutAddressRules: { standbyKeepsRouteAddress: true } }
+  );
+});
+
+test("a division that keeps its own pullout address falls back to the route's standing Master Run Cut address when today's day record has none", async () => {
+  const days = [
+    day({
+      route: { _id: "route-204", code: "204", type: "standard" },
+      status: "unassigned",
+      operator: null,
+      vehicle: null,
+      pulloutAddress: "",
+      clientNotes: "",
+    }),
+    day({
+      route: { _id: "route-stby203", code: "STBY 203", type: "standby" },
+      operator: { name: "Antoine Fowler" },
+      vehicle: { code: "4585" },
+      pulloutAddress: "1586 Sunnyvale Ave.",
+      startTime: "06:30",
+      endTime: "16:30",
+      deployed: true,
+      coveringRoute: { _id: "route-204", code: "204" },
+    }),
+  ];
+
+  await withMocks(
+    days,
+    async () => {
+      const res = response();
+      await getWorkOrderReport(
+        { user: { role: "ELT", divisionAccess: [] }, query: { division: divisionId, from: "2026-09-13" } },
+        res
+      );
+
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(res.body);
+      const sunday = workbook.getWorksheet("SUN");
+
+      assert.equal(sunday.getRow(2).getCell(7).value, "GoLink's standing stop");
+    },
+    { pulloutAddressRules: { standbyKeepsRouteAddress: true } },
+    [{ route: "route-204", pulloutAddress: "GoLink's standing stop" }]
+  );
 });

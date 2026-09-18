@@ -72,7 +72,7 @@ export const updateDivision = async (req, res) => {
     return res.status(403).json({ message: "No access to this division" });
   }
 
-  const { name, active, thresholds } = req.body;
+  const { name, active, thresholds, pulloutAddressRules } = req.body;
   if (name !== undefined) {
     if (req.user.role !== "ELT") {
       return res.status(403).json({ message: "ELT access is required to rename a division" });
@@ -90,6 +90,14 @@ export const updateDivision = async (req, res) => {
   if (thresholds !== undefined) {
     if (thresholds.breakMinutes !== undefined) division.thresholds.breakMinutes = thresholds.breakMinutes;
     if (thresholds.revenueRatio !== undefined) division.thresholds.revenueRatio = thresholds.revenueRatio;
+  }
+  if (pulloutAddressRules !== undefined) {
+    if (pulloutAddressRules.standbyKeepsRouteAddress !== undefined) {
+      division.pulloutAddressRules.standbyKeepsRouteAddress = Boolean(pulloutAddressRules.standbyKeepsRouteAddress);
+    }
+    if (pulloutAddressRules.editableInLiveSchedule !== undefined) {
+      division.pulloutAddressRules.editableInLiveSchedule = Boolean(pulloutAddressRules.editableInLiveSchedule);
+    }
   }
   if (req.user.role === "ELT") {
     const { code, type, parentDivision, timezone } = req.body;

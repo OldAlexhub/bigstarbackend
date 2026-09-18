@@ -1,4 +1,5 @@
 import RunCutDay from "../models/RunCutDay.js";
+import RunCut from "../models/RunCut.js";
 import Division from "../models/Division.js";
 import { canAccessDivision } from "../middleware/access.js";
 import { DAYS_OF_WEEK } from "../utils/hours.js";
@@ -79,6 +80,26 @@ const loadScheduleRows = async ({ division, targetDate }) => {
     (day) => String(day.division) === String(division) || day.route?.type === "standby"
   );
 
+  // A division can opt to keep its own routes' pullout addresses even while
+  // covered by a standby (Settings -> pulloutAddressRules.standbyKeepsRouteAddress)
+  // — most divisions don't, so this map is usually empty.
+  const branchDivisions = await Division.find(
+    { _id: { $in: branchDivisionIds } },
+    "pulloutAddressRules"
+  ).lean();
+  const keepsOwnPulloutAddress = new Map(
+    branchDivisions.map((doc) => [doc._id.toString(), Boolean(doc.pulloutAddressRules?.standbyKeepsRouteAddress)])
+  );
+
+  // A route's own address is its standing Master Run Cut pullout, used as a
+  // fallback when today's day record has none (e.g. today is Unassigned) —
+  // only fetched when at least one division in this pool actually opted in.
+  let masterPulloutByRouteId = new Map();
+  if ([...keepsOwnPulloutAddress.values()].some(Boolean)) {
+    const masterRunCuts = await RunCut.find({ division: { $in: branchDivisionIds } }, "route pulloutAddress").lean();
+    masterPulloutByRouteId = new Map(masterRunCuts.map((rc) => [rc.route.toString(), rc.pulloutAddress]));
+  }
+
   // A standby covering a route supplies that route's actual operator,
   // vehicle, pullout, and schedule in both the full report and Updates.
   const coverageByRouteId = new Map();
@@ -92,12 +113,20 @@ const loadScheduleRows = async ({ division, targetDate }) => {
     .filter((day) => day.route?.type !== "standby")
     .map((day) => {
       const coveringStandby = coverageByRouteId.get(day.route?._id?.toString());
+      const useRoutePulloutAddress = keepsOwnPulloutAddress.get(String(day.division));
+      // Only matters for the branch below (covered, and this division keeps
+      // its own address) — day.pulloutAddress is used as-is everywhere else,
+      // unchanged from before this fallback existed.
+      const routeOwnPulloutAddress =
+        day.pulloutAddress || masterPulloutByRouteId.get(day.route?._id?.toString()) || "";
       return {
         routeId: day.route?._id?.toString() ?? "",
         route: day.route?.code ?? "",
         operator: coveringStandby ? coveringStandby.operator?.name ?? "" : day.operator?.name ?? "",
         vehicle: coveringStandby ? coveringStandby.vehicle?.code ?? "" : day.vehicle?.code ?? "",
-        pulloutAddress: coveringStandby ? coveringStandby.pulloutAddress : day.pulloutAddress,
+        pulloutAddress: coveringStandby
+          ? (useRoutePulloutAddress ? routeOwnPulloutAddress : coveringStandby.pulloutAddress)
+          : day.pulloutAddress,
         startTime: coveringStandby ? coveringStandby.startTime : day.startTime,
         endTime: coveringStandby ? coveringStandby.endTime : day.endTime,
         status: day.status,

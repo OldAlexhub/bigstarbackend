@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import RunCutDay from "../models/RunCutDay.js";
+import RunCut from "../models/RunCut.js";
 import Division from "../models/Division.js";
 import { canAccessDivision } from "../middleware/access.js";
 import { DAYS_OF_WEEK, RUN_CUT_STATUSES } from "../utils/hours.js";
@@ -93,6 +94,16 @@ const loadWorkOrderDays = async ({ divisionDoc, dates }) => {
     byDate.get(key).push(day);
   }
 
+  // A route's own address is its standing Master Run Cut pullout, used as a
+  // fallback when a covered day's own record has none (e.g. that day is
+  // Unassigned) — only fetched when this division actually keeps its own.
+  const keepsOwnPulloutAddress = Boolean(divisionDoc.pulloutAddressRules?.standbyKeepsRouteAddress);
+  let masterPulloutByRouteId = new Map();
+  if (keepsOwnPulloutAddress) {
+    const masterRunCuts = await RunCut.find({ division: divisionDoc._id }, "route pulloutAddress").lean();
+    masterPulloutByRouteId = new Map(masterRunCuts.map((rc) => [rc.route.toString(), rc.pulloutAddress]));
+  }
+
   return dates.map((date) => {
     const key = date.toISOString().slice(0, 10);
     const dayDocs = byDate.get(key) || [];
@@ -102,15 +113,23 @@ const loadWorkOrderDays = async ({ divisionDoc, dates }) => {
       .filter((day) => day.route?.type === "standby" && day.deployed && day.coveringRoute)
       .forEach((standbyDay) => coverageByRouteId.set(standbyDay.coveringRoute._id.toString(), standbyDay));
 
+    // Every non-standby row here belongs to the requested division itself
+    // (standby-type rows are the only ones pulled in from a shared branch
+    // pool), so its own pulloutAddressRules toggle applies to all of them.
     const rows = dayDocs.map((day) => {
       const isStandby = day.route?.type === "standby";
       const coveringStandby = !isStandby ? coverageByRouteId.get(day.route?._id?.toString()) : null;
+      const pulloutAddress = coveringStandby
+        ? (keepsOwnPulloutAddress
+            ? day.pulloutAddress || masterPulloutByRouteId.get(day.route?._id?.toString()) || ""
+            : coveringStandby.pulloutAddress)
+        : day.pulloutAddress;
       return {
         division: `${divisionDoc.code}${isStandby ? "_SB" : ""}`,
         route: day.route?.code ?? "",
         operator: (coveringStandby ? coveringStandby.operator?.name : day.operator?.name) || "",
         vehicle: (coveringStandby ? coveringStandby.vehicle?.code : day.vehicle?.code) || "",
-        pulloutAddress: (coveringStandby ? coveringStandby.pulloutAddress : day.pulloutAddress) || "",
+        pulloutAddress: pulloutAddress || "",
         startTime: coveringStandby ? coveringStandby.startTime : day.startTime,
         endTime: coveringStandby ? coveringStandby.endTime : day.endTime,
         statusLabel: STATUS_LABELS[day.status] || day.status || "",
@@ -208,7 +227,7 @@ export const getWorkOrderReport = async (req, res) => {
   const parsedFrom = parseDateOnly(from, "from");
   if (parsedFrom.error) return res.status(400).json({ message: parsedFrom.error });
 
-  const divisionDoc = await Division.findById(division).select("code name").lean();
+  const divisionDoc = await Division.findById(division).select("code name pulloutAddressRules").lean();
   if (!divisionDoc) return res.status(404).json({ message: "Division not found" });
 
   const dates = Array.from({ length: WORK_ORDER_SPAN_DAYS }, (_, index) => addDays(parsedFrom.date, index));

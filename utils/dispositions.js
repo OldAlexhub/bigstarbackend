@@ -41,12 +41,77 @@ export const syncStatusWithDisposition = (runCutDay, disposition) => {
   return true;
 };
 
+// Decides what pullout address a standby deploying onto a route should
+// supply, before calling activateRouteWithStandbyCoverage. Most divisions
+// want the standby's own address (the caller's default). A division that
+// opted to keep its routes' own addresses (Settings ->
+// pulloutAddressRules.standbyKeepsRouteAddress) instead keeps whatever the
+// covered day already has, falling back to the route's standing Master Run
+// Cut pullout when the day has none at all (e.g. today is Unassigned) —
+// otherwise "keep the route's own address" would just mean "leave it
+// blank," never showing an address at all.
+export const resolveStandbyPulloutAddress = ({
+  divisionKeepsRouteAddress,
+  standbyPulloutAddress,
+  coveredPulloutAddress,
+  masterPulloutAddress,
+}) => {
+  if (!divisionKeepsRouteAddress) return standbyPulloutAddress;
+  if (coveredPulloutAddress) return undefined;
+  return masterPulloutAddress || undefined;
+};
+
+// Three fields (pulloutAddress, operator, vehicle) can each be temporarily
+// taken over by whichever standby is covering this route, the same way:
+// snapshot what was there under "<field>BeforeStandby" the first time this
+// exact standby takes it, mark ownership under "<field>StandbyDay", and note
+// whether that prior value was itself an override. Refreshing the same
+// standby's own coverage does not re-snapshot (so a second activate call
+// doesn't clobber the pre-coverage value with the standby's own).
+const STANDBY_OWNED_FIELDS = {
+  pulloutAddress: { emptyValue: "" },
+  operator: { emptyValue: null },
+  vehicle: { emptyValue: null },
+};
+
+const applyStandbyOwnedField = (runCutDay, standbyRunCutDayId, field, newValue) => {
+  if (newValue === undefined) return;
+  const { emptyValue } = STANDBY_OWNED_FIELDS[field];
+  const standbyDayField = `${field}StandbyDay`;
+  const alreadyOwnedByThisStandby = String(runCutDay[standbyDayField] || "") === String(standbyRunCutDayId);
+  if (!alreadyOwnedByThisStandby) {
+    runCutDay[`${field}BeforeStandby`] = runCutDay[field] ?? emptyValue;
+    runCutDay[`${field}OverrideBeforeStandby`] = Boolean(runCutDay.overrides?.[field]);
+  }
+  runCutDay[field] = newValue ?? emptyValue;
+  runCutDay[standbyDayField] = standbyRunCutDayId;
+  if (runCutDay.overrides) runCutDay.overrides[field] = true;
+};
+
+const restoreStandbyOwnedField = (runCutDay, standbyRunCutDayId, field) => {
+  const { emptyValue } = STANDBY_OWNED_FIELDS[field];
+  const standbyDayField = `${field}StandbyDay`;
+  if (String(runCutDay[standbyDayField] || "") !== String(standbyRunCutDayId)) return false;
+
+  runCutDay[field] = runCutDay[`${field}BeforeStandby`] ?? emptyValue;
+  if (runCutDay.overrides) {
+    runCutDay.overrides[field] = Boolean(runCutDay[`${field}OverrideBeforeStandby`]);
+  }
+  runCutDay[standbyDayField] = null;
+  runCutDay[`${field}BeforeStandby`] = emptyValue;
+  runCutDay[`${field}OverrideBeforeStandby`] = false;
+  return true;
+};
+
 // Covering a route with standby means that duty is operating. Keep the
-// route's status and final outcome aligned in the same update.
+// route's status and final outcome aligned in the same update, and supply
+// whichever of pulloutAddress/operator/vehicle the caller passes (a field
+// left undefined is not touched at all — see resolveStandbyPulloutAddress
+// for why a division can ask pulloutAddress to be skipped this way).
 export const activateRouteWithStandbyCoverage = (
   runCutDay,
   standbyRunCutDayId,
-  standbyPulloutAddress
+  { pulloutAddress, operator, vehicle } = {}
 ) => {
   const alreadyOwnsRouteState =
     String(runCutDay.routeStateStandbyDay || "") === String(standbyRunCutDayId);
@@ -66,17 +131,9 @@ export const activateRouteWithStandbyCoverage = (
   runCutDay.dispositionSource = "standby";
   runCutDay.dispositionStandbyDay = standbyRunCutDayId;
 
-  if (standbyPulloutAddress !== undefined) {
-    const alreadyOwnedByThisStandby =
-      String(runCutDay.pulloutAddressStandbyDay || "") === String(standbyRunCutDayId);
-    if (!alreadyOwnedByThisStandby) {
-      runCutDay.pulloutAddressBeforeStandby = runCutDay.pulloutAddress || "";
-      runCutDay.pulloutAddressOverrideBeforeStandby = Boolean(runCutDay.overrides?.pulloutAddress);
-    }
-    runCutDay.pulloutAddress = standbyPulloutAddress || "";
-    runCutDay.pulloutAddressStandbyDay = standbyRunCutDayId;
-    if (runCutDay.overrides) runCutDay.overrides.pulloutAddress = true;
-  }
+  applyStandbyOwnedField(runCutDay, standbyRunCutDayId, "pulloutAddress", pulloutAddress);
+  applyStandbyOwnedField(runCutDay, standbyRunCutDayId, "operator", operator);
+  applyStandbyOwnedField(runCutDay, standbyRunCutDayId, "vehicle", vehicle);
 };
 
 export const removeStandbyCoverageFromRoute = (runCutDay, standbyRunCutDayId) => {
@@ -95,9 +152,15 @@ export const removeStandbyCoverageFromRoute = (runCutDay, standbyRunCutDayId) =>
     }
     runCutDay.serviceHours = runCutDay.serviceHoursBeforeStandby ?? 0;
     runCutDay.revenueHours = runCutDay.revenueHoursBeforeStandby ?? 0;
-    runCutDay.disposition = runCutDay.dispositionBeforeStandby || null;
-    runCutDay.dispositionSource = runCutDay.dispositionSourceBeforeStandby || null;
-    runCutDay.dispositionStandbyDay = runCutDay.dispositionStandbyDayBeforeStandby || null;
+    // Disposition is only reverted here if the standby still owns it — a
+    // dispatcher can manually change or clear a standby-set disposition
+    // (see updateRunCutDayException) without removing the coverage itself,
+    // and that manual choice must survive the coverage being removed later.
+    if (standbyOwnsDisposition) {
+      runCutDay.disposition = runCutDay.dispositionBeforeStandby || null;
+      runCutDay.dispositionSource = runCutDay.dispositionSourceBeforeStandby || null;
+      runCutDay.dispositionStandbyDay = runCutDay.dispositionStandbyDayBeforeStandby || null;
+    }
 
     runCutDay.routeStateStandbyDay = null;
     runCutDay.statusBeforeStandby = null;
@@ -115,18 +178,9 @@ export const removeStandbyCoverageFromRoute = (runCutDay, standbyRunCutDayId) =>
     changed = true;
   }
 
-  const standbyOwnsPullout =
-    String(runCutDay.pulloutAddressStandbyDay || "") === String(standbyRunCutDayId);
-  if (standbyOwnsPullout) {
-    runCutDay.pulloutAddress = runCutDay.pulloutAddressBeforeStandby || "";
-    if (runCutDay.overrides) {
-      runCutDay.overrides.pulloutAddress = Boolean(runCutDay.pulloutAddressOverrideBeforeStandby);
-    }
-    runCutDay.pulloutAddressStandbyDay = null;
-    runCutDay.pulloutAddressBeforeStandby = "";
-    runCutDay.pulloutAddressOverrideBeforeStandby = false;
-    changed = true;
-  }
+  changed = restoreStandbyOwnedField(runCutDay, standbyRunCutDayId, "pulloutAddress") || changed;
+  changed = restoreStandbyOwnedField(runCutDay, standbyRunCutDayId, "operator") || changed;
+  changed = restoreStandbyOwnedField(runCutDay, standbyRunCutDayId, "vehicle") || changed;
 
   return changed;
 };

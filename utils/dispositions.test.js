@@ -4,6 +4,7 @@ import {
   activateRouteWithStandbyCoverage,
   CLOSED_SUSPENDED_DISPOSITION,
   removeStandbyCoverageFromRoute,
+  resolveStandbyPulloutAddress,
   syncDispositionWithStatus,
   syncStatusWithDisposition,
 } from "./dispositions.js";
@@ -148,6 +149,41 @@ test("removing standby restores an unassigned or suspended route's exact prior s
   }
 });
 
+test("a disposition manually changed away from standby survives removing that standby's coverage", () => {
+  const runCutDay = {
+    status: "unassigned",
+    serviceHours: 0,
+    revenueHours: 0,
+    disposition: null,
+    dispositionSource: null,
+    dispositionStandbyDay: null,
+    routeStateStandbyDay: null,
+    statusBeforeStandby: null,
+    statusOverrideBeforeStandby: false,
+    serviceHoursBeforeStandby: null,
+    revenueHoursBeforeStandby: null,
+    dispositionBeforeStandby: null,
+    dispositionSourceBeforeStandby: null,
+    dispositionStandbyDayBeforeStandby: null,
+    overrides: { status: false },
+  };
+
+  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id");
+  assert.equal(runCutDay.disposition, "deployed_stby");
+
+  // A dispatcher unlocks and manually overrides the disposition without
+  // touching the standby coverage itself (updateRunCutDayException's "else"
+  // branch once the standby lock is removed).
+  runCutDay.disposition = "deployed_late";
+  runCutDay.dispositionSource = "manual";
+  runCutDay.dispositionStandbyDay = null;
+
+  assert.equal(removeStandbyCoverageFromRoute(runCutDay, "standby-day-id"), true);
+  assert.equal(runCutDay.status, "unassigned");
+  assert.equal(runCutDay.disposition, "deployed_late", "the manual override must not be reverted");
+  assert.equal(runCutDay.dispositionSource, "manual");
+});
+
 test("standby coverage carries its pullout address to the covered route and restores the prior value", () => {
   const runCutDay = {
     status: "active",
@@ -161,7 +197,7 @@ test("standby coverage carries its pullout address to the covered route and rest
     overrides: { pulloutAddress: false },
   };
 
-  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", "Standby Depot");
+  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", { pulloutAddress: "Standby Depot" });
 
   assert.equal(runCutDay.pulloutAddress, "Standby Depot");
   assert.equal(runCutDay.pulloutAddressStandbyDay, "standby-day-id");
@@ -174,6 +210,31 @@ test("standby coverage carries its pullout address to the covered route and rest
   assert.equal(runCutDay.overrides.pulloutAddress, false);
 });
 
+test("an undefined standby pullout address leaves the covered route's own address untouched (a division that keeps its route's address)", () => {
+  const runCutDay = {
+    status: "active",
+    disposition: null,
+    dispositionSource: null,
+    dispositionStandbyDay: null,
+    pulloutAddress: "GoLink's own stop",
+    pulloutAddressStandbyDay: null,
+    pulloutAddressBeforeStandby: "",
+    pulloutAddressOverrideBeforeStandby: false,
+    overrides: { pulloutAddress: false },
+  };
+
+  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", { pulloutAddress: undefined });
+
+  assert.equal(runCutDay.pulloutAddress, "GoLink's own stop");
+  assert.equal(runCutDay.pulloutAddressStandbyDay, null);
+  assert.equal(runCutDay.overrides.pulloutAddress, false);
+
+  // Removing that same coverage is then a no-op for pullout address, since
+  // the standby never took ownership of it.
+  assert.equal(removeStandbyCoverageFromRoute(runCutDay, "standby-day-id"), true);
+  assert.equal(runCutDay.pulloutAddress, "GoLink's own stop");
+});
+
 test("refreshing the same standby coverage does not replace the original pullout snapshot", () => {
   const runCutDay = {
     pulloutAddress: "Original Garage",
@@ -183,12 +244,100 @@ test("refreshing the same standby coverage does not replace the original pullout
     overrides: { pulloutAddress: true },
   };
 
-  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", "First Standby Depot");
-  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", "Updated Standby Depot");
+  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", { pulloutAddress: "First Standby Depot" });
+  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", { pulloutAddress: "Updated Standby Depot" });
 
   assert.equal(runCutDay.pulloutAddress, "Updated Standby Depot");
   assert.equal(runCutDay.pulloutAddressBeforeStandby, "Original Garage");
   removeStandbyCoverageFromRoute(runCutDay, "standby-day-id");
   assert.equal(runCutDay.pulloutAddress, "Original Garage");
   assert.equal(runCutDay.overrides.pulloutAddress, true);
+});
+
+test("standby coverage substitutes the operator and vehicle onto the covered route, restoring the prior ones", () => {
+  const runCutDay = {
+    status: "unassigned",
+    disposition: null,
+    dispositionSource: null,
+    dispositionStandbyDay: null,
+    operator: null,
+    operatorStandbyDay: null,
+    operatorBeforeStandby: null,
+    operatorOverrideBeforeStandby: false,
+    vehicle: "vehicle-original",
+    vehicleStandbyDay: null,
+    vehicleBeforeStandby: null,
+    vehicleOverrideBeforeStandby: false,
+    overrides: { operator: false, vehicle: true },
+  };
+
+  activateRouteWithStandbyCoverage(runCutDay, "standby-day-id", {
+    operator: "standby-operator",
+    vehicle: "standby-vehicle",
+  });
+
+  assert.equal(runCutDay.operator, "standby-operator");
+  assert.equal(runCutDay.operatorStandbyDay, "standby-day-id");
+  assert.equal(runCutDay.operatorBeforeStandby, null);
+  assert.equal(runCutDay.overrides.operator, true);
+
+  assert.equal(runCutDay.vehicle, "standby-vehicle");
+  assert.equal(runCutDay.vehicleStandbyDay, "standby-day-id");
+  assert.equal(runCutDay.vehicleBeforeStandby, "vehicle-original");
+  assert.equal(runCutDay.overrides.vehicle, true);
+
+  assert.equal(removeStandbyCoverageFromRoute(runCutDay, "standby-day-id"), true);
+  assert.equal(runCutDay.operator, null);
+  assert.equal(runCutDay.operatorStandbyDay, null);
+  assert.equal(runCutDay.overrides.operator, false);
+  assert.equal(runCutDay.vehicle, "vehicle-original");
+  assert.equal(runCutDay.overrides.vehicle, true);
+});
+
+test("resolveStandbyPulloutAddress uses the standby's own address when a division has not opted in", () => {
+  assert.equal(
+    resolveStandbyPulloutAddress({
+      divisionKeepsRouteAddress: false,
+      standbyPulloutAddress: "Standby Depot",
+      coveredPulloutAddress: "",
+      masterPulloutAddress: "GoLink's standing stop",
+    }),
+    "Standby Depot"
+  );
+});
+
+test("resolveStandbyPulloutAddress leaves the covered day's own address alone when it already has one", () => {
+  assert.equal(
+    resolveStandbyPulloutAddress({
+      divisionKeepsRouteAddress: true,
+      standbyPulloutAddress: "Standby Depot",
+      coveredPulloutAddress: "GoLink's own stop",
+      masterPulloutAddress: "GoLink's standing stop",
+    }),
+    undefined
+  );
+});
+
+test("resolveStandbyPulloutAddress falls back to the route's standing Master Run Cut address when the covered day has none — this is the fix for a division whose Unassigned days show a blank pullout instead of the route's real one", () => {
+  assert.equal(
+    resolveStandbyPulloutAddress({
+      divisionKeepsRouteAddress: true,
+      standbyPulloutAddress: "Standby Depot",
+      coveredPulloutAddress: "",
+      masterPulloutAddress: "GoLink's standing stop",
+    }),
+    "GoLink's standing stop"
+  );
+});
+
+test("resolveStandbyPulloutAddress leaves the address untouched when neither the day nor the master run cut has one", () => {
+  assert.equal(
+    resolveStandbyPulloutAddress({
+      divisionKeepsRouteAddress: true,
+      standbyPulloutAddress: "Standby Depot",
+      coveredPulloutAddress: "",
+      masterPulloutAddress: "",
+    }),
+    undefined
+  );
 });

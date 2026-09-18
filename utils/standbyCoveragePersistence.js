@@ -12,6 +12,8 @@ export const restoreCoverageOwnedByStandbyDays = async (standbyDayIds, updatedBy
       { routeStateStandbyDay: { $in: standbyDayIds } },
       { dispositionStandbyDay: { $in: standbyDayIds } },
       { pulloutAddressStandbyDay: { $in: standbyDayIds } },
+      { operatorStandbyDay: { $in: standbyDayIds } },
+      { vehicleStandbyDay: { $in: standbyDayIds } },
     ],
   });
 
@@ -21,6 +23,8 @@ export const restoreCoverageOwnedByStandbyDays = async (standbyDayIds, updatedBy
         coveredDay.routeStateStandbyDay,
         coveredDay.dispositionStandbyDay,
         coveredDay.pulloutAddressStandbyDay,
+        coveredDay.operatorStandbyDay,
+        coveredDay.vehicleStandbyDay,
       ]
         .filter((id) => id && idSet.has(String(id)));
       let changed = false;

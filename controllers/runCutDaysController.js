@@ -1,4 +1,5 @@
 import RunCutDay from "../models/RunCutDay.js";
+import RunCut from "../models/RunCut.js";
 import Division from "../models/Division.js";
 import Route from "../models/Route.js";
 import Settings from "../models/Settings.js";
@@ -13,6 +14,7 @@ import {
   CLOSED_SUSPENDED_DISPOSITION,
   DISPOSITION_TYPES,
   removeStandbyCoverageFromRoute,
+  resolveStandbyPulloutAddress,
   syncDispositionWithStatus,
   syncStatusWithDisposition,
 } from "../utils/dispositions.js";
@@ -209,13 +211,35 @@ export const setRunCutDayDeployed = async (req, res) => {
       }
 
       if (deployed && coveredRunCutDay) {
+        const divisionDoc = await Division.findById(coveredRunCutDay.division);
+        const divisionKeepsRouteAddress = Boolean(divisionDoc?.pulloutAddressRules?.standbyKeepsRouteAddress);
+        let masterPulloutAddress;
+        if (divisionKeepsRouteAddress && !coveredRunCutDay.pulloutAddress) {
+          const masterRunCut = await RunCut.findOne({
+            division: coveredRunCutDay.division,
+            route: coveredRunCutDay.route,
+          }).select("pulloutAddress");
+          masterPulloutAddress = masterRunCut?.pulloutAddress;
+        }
         activateRouteWithStandbyCoverage(
           coveredRunCutDay,
           runCutDay._id,
-          runCutDay.pulloutAddress
+          {
+            // Whoever is actually driving today is the standby, on the
+            // standby's own vehicle — Live Schedule should show that
+            // reality directly, the same way the Client Report and Work
+            // Order already display it.
+            operator: runCutDay.operator,
+            vehicle: runCutDay.vehicle,
+            pulloutAddress: resolveStandbyPulloutAddress({
+              divisionKeepsRouteAddress,
+              standbyPulloutAddress: runCutDay.pulloutAddress,
+              coveredPulloutAddress: coveredRunCutDay.pulloutAddress,
+              masterPulloutAddress,
+            }),
+          }
         );
         coveredRunCutDay.overrides.status = true;
-        const divisionDoc = await Division.findById(coveredRunCutDay.division);
         const thresholds = await getEffectiveThresholds(divisionDoc);
         const { serviceHours, revenueHours } = computeHours({
           startTime: coveredRunCutDay.startTime,
@@ -387,13 +411,12 @@ export const updateRunCutDayException = async (req, res) => {
     if (disposition !== null && !DISPOSITION_TYPES.includes(disposition)) {
       return res.status(400).json({ message: "Invalid disposition." });
     }
-    if (runCutDay.dispositionSource === "standby") {
-      if (disposition !== runCutDay.disposition) {
-        return res.status(400).json({
-          message: "Remove the standby coverage before changing this route's disposition.",
-        });
-      }
-    } else if (disposition === CLOSED_SUSPENDED_DISPOSITION) {
+    // A standby-set disposition is a starting point, not a lock — dispatch
+    // can change or clear it here without removing the standby coverage
+    // itself. Once changed, it stops being standby-owned (see
+    // removeStandbyCoverageFromRoute), so removing that coverage later
+    // won't revert this manual choice.
+    if (disposition === CLOSED_SUSPENDED_DISPOSITION) {
       const wasSuspended = runCutDay.status === "suspended";
       syncStatusWithDisposition(runCutDay, disposition);
       runCutDay.overrides.status = true;

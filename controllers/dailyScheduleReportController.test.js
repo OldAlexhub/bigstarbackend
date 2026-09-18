@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import Division from "../models/Division.js";
 import RunCutDay from "../models/RunCutDay.js";
+import RunCut from "../models/RunCut.js";
 import {
   exceptionRowsForReport,
   getDailyScheduleReport,
@@ -31,7 +32,7 @@ test("disposition-only changes do not alter today's or tomorrow's client report"
     result.select = () => result;
     return result;
   };
-  Division.find = () => ({ distinct: async () => ["division-1"] });
+  Division.find = () => ({ distinct: async () => ["division-1"], lean: async () => [] });
   RunCutDay.find = () => {
     const query = {
       populate() {
@@ -94,7 +95,7 @@ test("a standby from a sibling branch is used in the selected branch's client re
     result.select = () => result;
     return result;
   };
-  Division.find = () => ({ distinct: async () => ["ada", "golink"] });
+  Division.find = () => ({ distinct: async () => ["ada", "golink"], lean: async () => [] });
   RunCutDay.find = () => ({
     populate() {
       return this;
@@ -139,6 +140,135 @@ test("a standby from a sibling branch is used in the selected branch's client re
     Division.findById = originalFindById;
     Division.find = originalDivisionFind;
     RunCutDay.find = originalRunCutDayFind;
+  }
+});
+
+test("a division that keeps its own pullout address is not overwritten by the covering standby's", async () => {
+  const originalFindById = Division.findById;
+  const originalDivisionFind = Division.find;
+  const originalRunCutDayFind = RunCutDay.find;
+  const originalRunCutFind = RunCut.find;
+  const divisionDoc = { _id: "golink", code: "DIV_3_GL", name: "Division 3 - GoLink" };
+
+  Division.findById = () => {
+    const result = Promise.resolve(divisionDoc);
+    result.select = () => result;
+    return result;
+  };
+  Division.find = () => ({
+    distinct: async () => ["ada", "golink"],
+    lean: async () => [{ _id: "golink", pulloutAddressRules: { standbyKeepsRouteAddress: true } }],
+  });
+  RunCut.find = () => ({ lean: async () => [] });
+  RunCutDay.find = () => ({
+    populate() {
+      return this;
+    },
+    sort() {
+      return Promise.resolve([
+        {
+          division: "golink",
+          route: { _id: "gl-route", code: "GL-1", type: "standard" },
+          operator: null,
+          vehicle: null,
+          pulloutAddress: "GoLink's own stop",
+          status: "unassigned",
+          clientNotes: "",
+        },
+        {
+          division: "ada",
+          route: { _id: "standby-route", code: "STBY-1", type: "standby" },
+          operator: { name: "Shared Operator" },
+          vehicle: { code: "SHARED-BUS" },
+          pulloutAddress: "Shared Garage",
+          startTime: "08:00",
+          endTime: "16:00",
+          deployed: true,
+          coveringRoute: { _id: "gl-route", code: "GL-1" },
+        },
+      ]);
+    },
+  });
+
+  try {
+    const response = responseRecorder();
+    await getDailyScheduleReport(
+      { user: { role: "ELT" }, query: { division: "golink", date: "2026-09-14" } },
+      response
+    );
+
+    assert.equal(response.body.rows[0].operator, "Shared Operator");
+    assert.equal(response.body.rows[0].pulloutAddress, "GoLink's own stop");
+  } finally {
+    Division.findById = originalFindById;
+    Division.find = originalDivisionFind;
+    RunCutDay.find = originalRunCutDayFind;
+    RunCut.find = originalRunCutFind;
+  }
+});
+
+test("a division that keeps its own pullout address falls back to the route's standing Master Run Cut address when today's day record has none", async () => {
+  const originalFindById = Division.findById;
+  const originalDivisionFind = Division.find;
+  const originalRunCutDayFind = RunCutDay.find;
+  const originalRunCutFind = RunCut.find;
+  const divisionDoc = { _id: "golink", code: "DIV_3_GL", name: "Division 3 - GoLink" };
+
+  Division.findById = () => {
+    const result = Promise.resolve(divisionDoc);
+    result.select = () => result;
+    return result;
+  };
+  Division.find = () => ({
+    distinct: async () => ["ada", "golink"],
+    lean: async () => [{ _id: "golink", pulloutAddressRules: { standbyKeepsRouteAddress: true } }],
+  });
+  RunCut.find = () => ({
+    lean: async () => [{ route: "gl-route", pulloutAddress: "GoLink's standing stop" }],
+  });
+  RunCutDay.find = () => ({
+    populate() {
+      return this;
+    },
+    sort() {
+      return Promise.resolve([
+        {
+          division: "golink",
+          route: { _id: "gl-route", code: "GL-1", type: "standard" },
+          operator: null,
+          vehicle: null,
+          pulloutAddress: "",
+          status: "unassigned",
+          clientNotes: "",
+        },
+        {
+          division: "ada",
+          route: { _id: "standby-route", code: "STBY-1", type: "standby" },
+          operator: { name: "Shared Operator" },
+          vehicle: { code: "SHARED-BUS" },
+          pulloutAddress: "Shared Garage",
+          startTime: "08:00",
+          endTime: "16:00",
+          deployed: true,
+          coveringRoute: { _id: "gl-route", code: "GL-1" },
+        },
+      ]);
+    },
+  });
+
+  try {
+    const response = responseRecorder();
+    await getDailyScheduleReport(
+      { user: { role: "ELT" }, query: { division: "golink", date: "2026-09-14" } },
+      response
+    );
+
+    assert.equal(response.body.rows[0].pulloutAddress, "GoLink's standing stop");
+  } finally {
+    Division.findById = originalFindById;
+    Division.find = originalDivisionFind;
+    RunCutDay.find = originalRunCutDayFind;
+    RunCut.find = originalRunCutFind;
   }
 });
 
