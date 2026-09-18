@@ -33,6 +33,31 @@ const deploymentActivityLogSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    // Populated only for actions with a structured before/after to show (so
+    // far just a Permanent OSR) — one entry per field that changed, letting
+    // a report list "from -> to" per field instead of parsing the summary
+    // text. route/reason are snapshotted alongside for the same reports.
+    route: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    reason: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    changes: {
+      type: [
+        {
+          field: { type: String, trim: true },
+          from: { type: String, trim: true, default: "" },
+          to: { type: String, trim: true, default: "" },
+          _id: false,
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );

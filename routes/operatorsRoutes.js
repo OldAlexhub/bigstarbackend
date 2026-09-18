@@ -16,6 +16,7 @@ const operatorPages = [
   "master_run_cuts.run_cuts",
   "master_run_cuts.drivers",
   "deployment.live_schedule",
+  "deployment.permanent_osr",
   "deployment.issue_log",
   "network_success.performance",
   "network_success.reallocation_requests",

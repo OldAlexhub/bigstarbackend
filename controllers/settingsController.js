@@ -15,7 +15,8 @@ export const getSettings = async (req, res) => {
 
 export const updateSettings = async (req, res) => {
   const settings = await Settings.getSingleton();
-  const { breakMinutes, revenueRatio, osrAdvanceDays, operationsReportingStartMonth } = req.body;
+  const { breakMinutes, revenueRatio, osrAdvanceDays, scheduleHistoryLookbackWeeks, operationsReportingStartMonth } =
+    req.body;
   if (breakMinutes !== undefined) settings.breakMinutes = breakMinutes;
   if (revenueRatio !== undefined) settings.revenueRatio = revenueRatio;
   if (osrAdvanceDays !== undefined) {
@@ -24,6 +25,13 @@ export const updateSettings = async (req, res) => {
       return res.status(400).json({ message: "OSR advance days must be a whole number from 0 through 7." });
     }
     settings.osrAdvanceDays = parsedDays;
+  }
+  if (scheduleHistoryLookbackWeeks !== undefined) {
+    const parsedWeeks = Number(scheduleHistoryLookbackWeeks);
+    if (!Number.isInteger(parsedWeeks) || parsedWeeks < 1 || parsedWeeks > 12) {
+      return res.status(400).json({ message: "Schedule History lookback weeks must be a whole number from 1 through 12." });
+    }
+    settings.scheduleHistoryLookbackWeeks = parsedWeeks;
   }
   if (operationsReportingStartMonth !== undefined) {
     if (!isCalendarMonth(operationsReportingStartMonth)) {

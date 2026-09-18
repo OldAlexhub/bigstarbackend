@@ -20,6 +20,16 @@ const settingsSchema = new mongoose.Schema(
       },
       default: 7,
     },
+    scheduleHistoryLookbackWeeks: {
+      type: Number,
+      min: 1,
+      max: 12,
+      validate: {
+        validator: Number.isInteger,
+        message: "Schedule History lookback weeks must be a whole number",
+      },
+      default: 6,
+    },
     operationsReportingStartMonth: {
       type: String,
       default: () => new Date().toISOString().slice(0, 7),

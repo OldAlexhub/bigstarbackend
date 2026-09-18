@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import RunCut from "../models/RunCut.js";
 import RunCutDay from "../models/RunCutDay.js";
+import Route from "../models/Route.js";
 import {
   findOperatorConflict,
   findOperatorConflictOnDate,
@@ -9,6 +10,7 @@ import {
   findVehicleConflictIds,
   findVehicleConflictOnDate,
   recurringOverlapDays,
+  resolveRoute,
   timeRangesOverlap,
 } from "./resolveAssignment.js";
 
@@ -186,6 +188,65 @@ test("dated Deployment conflicts ignore non-operating duties for operators and v
     }
   } finally {
     RunCutDay.find = originalFind;
+  }
+});
+
+test("a standby's own duty does not block a different dated assignment for its operator or vehicle", async () => {
+  const originalFind = RunCutDay.find;
+  RunCutDay.find = () => ({
+    populate: async () => [{
+      route: { code: "STBY-2", type: "standby" },
+      status: "active",
+      date: new Date("2026-09-15"),
+      startTime: "04:00",
+      endTime: "14:00",
+    }],
+  });
+
+  try {
+    const assignment = { date: new Date("2026-09-15"), startTime: "05:00", endTime: "12:00", status: "active" };
+    assert.equal(await findOperatorConflictOnDate({ operator: "operator-1", ...assignment }), null);
+    assert.equal(await findVehicleConflictOnDate({ vehicle: "vehicle-1", ...assignment }), null);
+  } finally {
+    RunCutDay.find = originalFind;
+  }
+});
+
+test("resolveRoute reuses an existing division route by code regardless of active state", async () => {
+  const originalFindOne = Route.findOne;
+  const originalCreate = Route.create;
+  let created = false;
+  Route.findOne = async ({ division, code }) => {
+    assert.equal(division, "division-1");
+    assert.ok(code.test("extra-3"), "matches case-insensitively");
+    return { _id: "route-3", division, code: "EXTRA-3", active: false, type: "standard" };
+  };
+  Route.create = async () => {
+    created = true;
+    throw new Error("should not create a route that already exists");
+  };
+  try {
+    const route = await resolveRoute("division-1", "extra-3");
+    assert.equal(route._id, "route-3");
+    assert.equal(created, false);
+  } finally {
+    Route.findOne = originalFindOne;
+    Route.create = originalCreate;
+  }
+});
+
+test("resolveRoute makes up a new one-off route when no code matches", async () => {
+  const originalFindOne = Route.findOne;
+  const originalCreate = Route.create;
+  Route.findOne = async () => null;
+  Route.create = async (payload) => ({ _id: "route-new", ...payload });
+  try {
+    const route = await resolveRoute("division-1", "  99 x  ");
+    assert.equal(route.division, "division-1");
+    assert.equal(route.code, "99X");
+  } finally {
+    Route.findOne = originalFindOne;
+    Route.create = originalCreate;
   }
 });
 

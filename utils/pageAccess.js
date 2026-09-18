@@ -16,6 +16,7 @@ export const PAGE_ACCESS_GROUPS = [
     key: "deployment",
     pages: [
       "deployment.live_schedule",
+      "deployment.permanent_osr",
       "deployment.standby_utilization",
       "deployment.issue_log",
       "deployment.client_report",

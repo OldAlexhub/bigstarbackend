@@ -25,6 +25,7 @@ import { todayInTimezone } from "../utils/timezone.js";
 import {
   resolveOperator,
   resolveVehicle,
+  resolveRoute,
   findOperatorConflictOnDate,
   findVehicleConflictOnDate,
 } from "../utils/resolveAssignment.js";
@@ -282,6 +283,7 @@ export const updateRunCutDayException = async (req, res) => {
     operatorName,
     vehicleId,
     vehicleCode,
+    pulloutAddress,
     startTime,
     endTime,
     status,
@@ -325,6 +327,15 @@ export const updateRunCutDayException = async (req, res) => {
     runCutDay.overrides.operator = true;
     runCutDay.overrides.pulloutAddress = true;
     changeDescriptions.push(`operator to ${operatorDoc?.name || "unassigned"}`);
+  }
+  // A driver's saved pullout address is only the usual case — the actual
+  // pickup spot for one date can differ (a rider's request, a detour), so a
+  // pulloutAddress sent here always wins over the operator-derived default
+  // above, even when this route is currently borrowing a standby's address.
+  if (pulloutAddress !== undefined) {
+    runCutDay.pulloutAddress = pulloutAddress || "";
+    runCutDay.overrides.pulloutAddress = true;
+    changeDescriptions.push("pullout address");
   }
   if (vehicleId !== undefined || vehicleCode !== undefined) {
     let vehicleDoc;
@@ -463,17 +474,20 @@ export const updateRunCutDayException = async (req, res) => {
   res.json({ runCutDay: populated });
 };
 
-// An operator picking up revenue on an existing division route/date outside
-// its normal schedule — a one-off, not a change to the ongoing plan. The
-// route must come from that division's active route pool.
+// An operator picking up revenue on a route outside its normal schedule for
+// today or tomorrow only — a one-off, not a change to the ongoing plan.
+// Either pick an existing route from the division's active pool (routeId),
+// or make up a route number for a route that only runs this one day
+// (routeCode) — resolveRoute finds or creates that division's Route by
+// code, the same way an operator/vehicle name resolves against its roster.
 export const createExtraRunCutDay = async (req, res) => {
-  const { division, date, routeId, operatorId, operatorName, vehicleId, vehicleCode, startTime, endTime, notes } =
+  const { division, date, routeId, routeCode, operatorId, operatorName, vehicleId, vehicleCode, startTime, endTime, notes } =
     req.body;
   if (!canAccessDivision(req.user, division)) {
     return res.status(403).json({ message: "No access to this division" });
   }
-  if (!date || !routeId) {
-    return res.status(400).json({ message: "date and a route from this division are required" });
+  if (!date || (!routeId && !routeCode)) {
+    return res.status(400).json({ message: "date and a route are required" });
   }
 
   const dayDate = new Date(date);
@@ -485,13 +499,18 @@ export const createExtraRunCutDay = async (req, res) => {
       if (!divisionDoc) throw httpError(404, "Division not found");
       requireTodayOrTomorrow(dayDate, divisionDoc);
 
-      route = await Route.findOne({
-        _id: routeId,
-        division,
-        type: { $ne: "standby" },
-        active: { $ne: false },
-      });
-      if (!route) throw httpError(400, "Choose an active revenue route from this division.");
+      route = routeId
+        ? await Route.findOne({ _id: routeId, division, type: { $ne: "standby" }, active: { $ne: false } })
+        : await resolveRoute(division, routeCode);
+      if (!route) {
+        throw httpError(
+          400,
+          routeId ? "Choose an active revenue route from this division." : "Enter a route number."
+        );
+      }
+      if (route.type === "standby") {
+        throw httpError(400, "That route number belongs to a standby route. Enter a different number.");
+      }
 
       const operatorDoc = await resolveOperator(division, operatorId ?? operatorName);
       const vehicleDoc = await resolveVehicle(division, vehicleId ?? vehicleCode);

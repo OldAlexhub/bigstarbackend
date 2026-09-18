@@ -161,6 +161,11 @@ export const findOperatorConflict = async ({ operator, daysOfWeek, startTime, en
 // Checking every other RunCutDay this operator has on this exact date
 // covers both their regular scheduled route (already projected onto this
 // date) and any other extras, in one query.
+//
+// A standby's own duty hours are an availability window, not a commitment —
+// deploying a standby to cover a route already skips this check against the
+// standby's own hours, so a standby candidate is never treated as a
+// blocking conflict here either; only their non-standby duties can collide.
 export const findOperatorConflictOnDate = async ({ operator, date, startTime, endTime, status = "active", excludeRunCutDayId }) => {
   if (!isOperatingAssignmentStatus(status) || !operator || !date || !startTime || !endTime) return null;
 
@@ -171,10 +176,11 @@ export const findOperatorConflictOnDate = async ({ operator, date, startTime, en
     status: { $nin: NON_OPERATING_RUN_CUT_STATUSES },
     date: { $gte: from, $lte: to },
     _id: { $ne: excludeRunCutDayId },
-  }).populate("route", "code");
+  }).populate("route", "code type");
 
   for (const candidate of candidates) {
     if (!isOperatingAssignmentStatus(candidate.status)) continue;
+    if (candidate.route?.type === "standby") continue;
     if (datedRangesOverlap(date, startTime, endTime, candidate.date, candidate.startTime, candidate.endTime)) {
       return { routeCode: candidate.route?.code, startTime: candidate.startTime, endTime: candidate.endTime };
     }
@@ -214,6 +220,9 @@ export const findVehicleConflict = async ({ vehicle, daysOfWeek, startTime, endT
   return null;
 };
 
+// Same standby exemption as findOperatorConflictOnDate: a vehicle parked
+// with a standby duty isn't committed anywhere yet, so that duty alone
+// doesn't block using the vehicle for a different dated assignment.
 export const findVehicleConflictOnDate = async ({ vehicle, date, startTime, endTime, status = "active", excludeRunCutDayId }) => {
   if (!isOperatingAssignmentStatus(status) || !vehicle || !date || !startTime || !endTime) return null;
 
@@ -224,10 +233,11 @@ export const findVehicleConflictOnDate = async ({ vehicle, date, startTime, endT
     status: { $nin: NON_OPERATING_RUN_CUT_STATUSES },
     date: { $gte: from, $lte: to },
     _id: { $ne: excludeRunCutDayId },
-  }).populate("route", "code");
+  }).populate("route", "code type");
 
   for (const candidate of candidates) {
     if (!isOperatingAssignmentStatus(candidate.status)) continue;
+    if (candidate.route?.type === "standby") continue;
     if (datedRangesOverlap(date, startTime, endTime, candidate.date, candidate.startTime, candidate.endTime)) {
       return { routeCode: candidate.route?.code, startTime: candidate.startTime, endTime: candidate.endTime };
     }

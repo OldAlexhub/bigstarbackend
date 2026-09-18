@@ -16,6 +16,7 @@ router.get("/", requireAnyPageAccess([
   "master_run_cuts.run_cuts",
   "master_run_cuts.vehicles",
   "deployment.live_schedule",
+  "deployment.permanent_osr",
   "network_success.reallocation_requests",
 ]), listVehicles);
 router.post("/", requirePageWrite("master_run_cuts.vehicles"), createVehicle);
