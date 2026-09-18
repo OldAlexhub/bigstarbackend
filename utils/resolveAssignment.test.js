@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import RunCut from "../models/RunCut.js";
 import RunCutDay from "../models/RunCutDay.js";
 import Route from "../models/Route.js";
+import Operator from "../models/Operator.js";
+import Division from "../models/Division.js";
 import {
   findOperatorConflict,
   findOperatorConflictOnDate,
@@ -10,6 +12,7 @@ import {
   findVehicleConflictIds,
   findVehicleConflictOnDate,
   recurringOverlapDays,
+  resolveOperatorInBranchGroup,
   resolveRoute,
   timeRangesOverlap,
 } from "./resolveAssignment.js";
@@ -247,6 +250,55 @@ test("resolveRoute makes up a new one-off route when no code matches", async () 
   } finally {
     Route.findOne = originalFindOne;
     Route.create = originalCreate;
+  }
+});
+
+test("resolveOperatorInBranchGroup finds a driver who belongs to a sibling division in the shared standby pool", async () => {
+  const originalFindById = Division.findById;
+  const originalDivisionFind = Division.find;
+  const originalOperatorFindOne = Operator.findOne;
+  let capturedQuery;
+
+  Division.findById = () => ({
+    select: async () => ({ _id: "golink", code: "DIV_3_GL", active: true }),
+  });
+  Division.find = () => ({ distinct: async () => ["ada", "golink", "standby-pool"] });
+  Operator.findOne = async (query) => {
+    capturedQuery = query;
+    return { _id: "sydney", name: "Sydney Austen", division: "standby-pool", active: true };
+  };
+
+  try {
+    const operator = await resolveOperatorInBranchGroup("golink", "sydney");
+    assert.equal(operator.name, "Sydney Austen");
+    assert.deepEqual(capturedQuery.division.$in, ["ada", "golink", "standby-pool"]);
+  } finally {
+    Division.findById = originalFindById;
+    Division.find = originalDivisionFind;
+    Operator.findOne = originalOperatorFindOne;
+  }
+});
+
+test("resolveOperatorInBranchGroup rejects a driver outside the division's branch group", async () => {
+  const originalFindById = Division.findById;
+  const originalDivisionFind = Division.find;
+  const originalOperatorFindOne = Operator.findOne;
+
+  Division.findById = () => ({
+    select: async () => ({ _id: "division-1", code: "DIV_9", active: true }),
+  });
+  Division.find = () => ({ distinct: async () => ["division-1"] });
+  Operator.findOne = async () => null;
+
+  try {
+    await assert.rejects(
+      resolveOperatorInBranchGroup("division-1", "someone-else"),
+      /shared standby pool/
+    );
+  } finally {
+    Division.findById = originalFindById;
+    Division.find = originalDivisionFind;
+    Operator.findOne = originalOperatorFindOne;
   }
 });
 

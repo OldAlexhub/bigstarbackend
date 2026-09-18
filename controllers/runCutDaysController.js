@@ -25,7 +25,7 @@ import { httpError, respondToHttpError } from "../utils/httpError.js";
 import { getBranchGroupDivisionIds } from "../utils/divisionBranches.js";
 import { todayInTimezone } from "../utils/timezone.js";
 import {
-  resolveOperator,
+  resolveOperatorInBranchGroup,
   resolveVehicle,
   resolveRoute,
   findOperatorConflictOnDate,
@@ -108,9 +108,10 @@ export const listRunCutDays = async (req, res) => {
 // The one direct edit RunCutDay still allows on a normal scheduled day (see
 // updateRunCutDayException for Deployment's day-specific edits): whether a
 // standby duty was actually called in on this specific date, and if so,
-// which scheduled route it's covering — deploying without saying which
-// route it's covering isn't useful, so coveringRoute is required whenever
-// deployed is being set to true, and is always cleared when set to false.
+// which scheduled route it's covering. coveringRoute is optional — a
+// standby can be marked deployed (in service) without covering any existing
+// scheduled route, e.g. when picking up a one-off Add Revenue Route duty
+// instead — and is always cleared when deployed is set back to false.
 export const setRunCutDayDeployed = async (req, res) => {
   let runCutDayId;
   let affectedDivisions = [];
@@ -148,11 +149,8 @@ export const setRunCutDayDeployed = async (req, res) => {
 
       let coveringRouteCode = null;
       let coveredRunCutDay = null;
-      if (deployed) {
+      if (deployed && req.body.coveringRoute) {
         const { coveringRoute } = req.body;
-        if (!coveringRoute) {
-          throw httpError(400, "Select which route this standby is covering.");
-        }
         if (!routeDoc) throw httpError(400, "That route is unavailable.");
         if (routeDoc.type === "standby") {
           throw httpError(400, "A standby can only cover a scheduled route.");
@@ -185,6 +183,9 @@ export const setRunCutDayDeployed = async (req, res) => {
         runCutDay.coveringRoute = routeDoc._id;
         coveringRouteCode = routeDoc.code;
       } else {
+        // Either not deployed, or deployed without covering any existing
+        // scheduled route (in service generally, e.g. for a one-off Add
+        // Revenue Route duty).
         runCutDay.coveringRoute = null;
       }
 
@@ -268,7 +269,9 @@ export const setRunCutDayDeployed = async (req, res) => {
         user: req.user,
         action: "runcutday.deployed_set",
         summary: deployed
-          ? `Marked standby ${runCutDay.route.code} deployed on ${isoDate(date)} (covering ${coveringRouteCode})`
+          ? `Marked standby ${runCutDay.route.code} deployed on ${isoDate(date)}${
+              coveringRouteCode ? ` (covering ${coveringRouteCode})` : ""
+            }`
           : `Marked standby ${runCutDay.route.code} not deployed on ${isoDate(date)}`,
       };
     });
@@ -337,7 +340,7 @@ export const updateRunCutDayException = async (req, res) => {
   if (operatorId !== undefined || operatorName !== undefined) {
     let operatorDoc;
     try {
-      operatorDoc = await resolveOperator(
+      operatorDoc = await resolveOperatorInBranchGroup(
         runCutDay.division,
         operatorId !== undefined ? operatorId : operatorName
       );
@@ -504,8 +507,20 @@ export const updateRunCutDayException = async (req, res) => {
 // (routeCode) — resolveRoute finds or creates that division's Route by
 // code, the same way an operator/vehicle name resolves against its roster.
 export const createExtraRunCutDay = async (req, res) => {
-  const { division, date, routeId, routeCode, operatorId, operatorName, vehicleId, vehicleCode, startTime, endTime, notes } =
-    req.body;
+  const {
+    division,
+    date,
+    routeId,
+    routeCode,
+    operatorId,
+    operatorName,
+    vehicleId,
+    vehicleCode,
+    pulloutAddress,
+    startTime,
+    endTime,
+    notes,
+  } = req.body;
   if (!canAccessDivision(req.user, division)) {
     return res.status(403).json({ message: "No access to this division" });
   }
@@ -535,7 +550,7 @@ export const createExtraRunCutDay = async (req, res) => {
         throw httpError(400, "That route number belongs to a standby route. Enter a different number.");
       }
 
-      const operatorDoc = await resolveOperator(division, operatorId ?? operatorName);
+      const operatorDoc = await resolveOperatorInBranchGroup(division, operatorId ?? operatorName);
       const vehicleDoc = await resolveVehicle(division, vehicleId ?? vehicleCode);
       const operator = operatorDoc?._id || null;
       const vehicle = vehicleDoc?._id || null;
@@ -558,7 +573,10 @@ export const createExtraRunCutDay = async (req, res) => {
         date: dayDate,
         operator,
         vehicle,
-        pulloutAddress: operatorDoc?.pulloutAddress || "",
+        // A driver's saved pullout address is the sensible default, but an
+        // explicit one wins — a one-off route can have its own pickup spot,
+        // same as the OSR Planner and a Permanent OSR already allow.
+        pulloutAddress: pulloutAddress !== undefined ? pulloutAddress || "" : operatorDoc?.pulloutAddress || "",
         startTime,
         endTime,
         status: "add_rte",

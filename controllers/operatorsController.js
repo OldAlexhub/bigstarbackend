@@ -5,6 +5,7 @@ import RunCutDay from "../models/RunCutDay.js";
 import { canAccessDivision, divisionFilter } from "../middleware/access.js";
 import { normalizeName } from "../utils/normalizeText.js";
 import { todayInTimezone } from "../utils/timezone.js";
+import { getBranchGroupDivisionIds } from "../utils/divisionBranches.js";
 
 const populatedOperator = (query) =>
   query.populate("division", "code name").populate("provider", "name");
@@ -21,7 +22,13 @@ export const listOperators = async (req, res) => {
     if (!canAccessDivision(req.user, req.query.division)) {
       return res.status(403).json({ message: "No access to this division" });
     }
-    filter.division = req.query.division;
+    // A division that shares its standby pool with related branches (e.g.
+    // Division 3 ADA/GoLink) also needs those branches' drivers selectable
+    // here — a shared-pool driver picking up a one-off route in this
+    // division shouldn't be limited to this division's own roster.
+    filter.division = req.query.sharedStandby === "1"
+      ? { $in: await getBranchGroupDivisionIds(req.query.division) }
+      : req.query.division;
   } else {
     const accessibleDivisionIds = await Division.find({
       ...divisionFilter(req.user),

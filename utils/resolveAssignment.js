@@ -5,6 +5,7 @@ import RunCut from "../models/RunCut.js";
 import RunCutDay from "../models/RunCutDay.js";
 import { normalizeName, normalizeCode, escapeRegex } from "./normalizeText.js";
 import { httpError } from "./httpError.js";
+import { getBranchGroupDivisionIds } from "./divisionBranches.js";
 import mongoose from "mongoose";
 import { NON_OPERATING_RUN_CUT_STATUSES, isOperatingAssignmentStatus } from "./hours.js";
 
@@ -25,6 +26,28 @@ export const resolveOperator = async (division, rawValue) => {
       };
   const operator = await Operator.findOne(query);
   if (!operator) throw httpError(400, "Choose a driver from this division's Drivers roster.");
+  if (operator.active === false) throw httpError(400, "That driver is inactive. Choose an active driver.");
+  return operator;
+};
+
+// Deployment's day-specific paths (a one-off extra route, a daily
+// exception) can pull a driver from anywhere in the division's shared
+// standby branch group, not just this exact division — Division 3 ADA and
+// GoLink share one standby pool, so a shared-pool driver picking up a
+// one-off route in either branch shouldn't need to belong to that exact
+// division's own roster. Master Run Cuts' persistent assignment stays
+// strictly single-division and keeps using resolveOperator unchanged.
+export const resolveOperatorInBranchGroup = async (division, rawValue) => {
+  if (!rawValue) return null;
+  const branchDivisionIds = await getBranchGroupDivisionIds(division);
+  const query = mongoose.isValidObjectId(rawValue)
+    ? { _id: rawValue, division: { $in: branchDivisionIds } }
+    : {
+        division: { $in: branchDivisionIds },
+        name: new RegExp(`^${escapeRegex(normalizeName(rawValue))}$`, "i"),
+      };
+  const operator = await Operator.findOne(query);
+  if (!operator) throw httpError(400, "Choose a driver from this division or its shared standby pool.");
   if (operator.active === false) throw httpError(400, "That driver is inactive. Choose an active driver.");
   return operator;
 };
