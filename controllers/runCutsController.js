@@ -6,6 +6,7 @@ import Vehicle from "../models/Vehicle.js";
 import { canAccessDivision, divisionFilter } from "../middleware/access.js";
 import { computeHours } from "../utils/hours.js";
 import { getEffectiveThresholds } from "../utils/thresholds.js";
+import { todayInTimezone } from "../utils/timezone.js";
 import { projectAssignment } from "../utils/projectAssignment.js";
 import {
   resolveOperator,
@@ -109,7 +110,7 @@ export const createRunCut = async (req, res) => {
       if (vehicleConflict) throw httpError(409, vehicleConflictMessage(vehicleConflict));
 
       const divisionDoc = await Division.findById(division);
-      const thresholds = await getEffectiveThresholds(divisionDoc);
+      const thresholds = await getEffectiveThresholds(divisionDoc, todayInTimezone(divisionDoc.timezone));
       const { serviceHours, revenueHours } = computeHours({
         startTime,
         endTime,
@@ -226,7 +227,7 @@ const applyRunCutEdit = async (runCut, rawBody, userId) => {
   if (vehicleConflict) throw httpError(409, vehicleConflictMessage(vehicleConflict));
 
   const divisionDoc = await Division.findById(runCut.division);
-  const thresholds = await getEffectiveThresholds(divisionDoc);
+  const thresholds = await getEffectiveThresholds(divisionDoc, todayInTimezone(divisionDoc.timezone));
   const { serviceHours, revenueHours } = computeHours({
     startTime: runCut.startTime,
     endTime: runCut.endTime,

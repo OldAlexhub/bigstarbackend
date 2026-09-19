@@ -164,7 +164,7 @@ const run = async () => {
   const divisionDocByCode = new Map();
   for (const [code, { samples }] of divisionCodes) {
     const isStandby = code.endsWith("_SB");
-    const thresholds = { breakMinutes: null, revenueRatio: null };
+    const thresholds = { breakMinutes: 30, revenueRatio: 0.9 };
     if (samples.length) {
       thresholds.breakMinutes = Math.round(samples.reduce((s, x) => s + x.breakMinutes, 0) / samples.length);
       const ratio = samples.reduce((s, x) => s + (x.revenueRatio ?? 0), 0) / samples.length;

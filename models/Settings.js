@@ -2,14 +2,6 @@ import mongoose from "mongoose";
 
 const settingsSchema = new mongoose.Schema(
   {
-    breakMinutes: {
-      type: Number,
-      default: 30,
-    },
-    revenueRatio: {
-      type: Number,
-      default: 0.9,
-    },
     osrAdvanceDays: {
       type: Number,
       min: 0,

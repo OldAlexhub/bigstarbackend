@@ -15,10 +15,7 @@ export const getSettings = async (req, res) => {
 
 export const updateSettings = async (req, res) => {
   const settings = await Settings.getSingleton();
-  const { breakMinutes, revenueRatio, osrAdvanceDays, scheduleHistoryLookbackWeeks, operationsReportingStartMonth } =
-    req.body;
-  if (breakMinutes !== undefined) settings.breakMinutes = breakMinutes;
-  if (revenueRatio !== undefined) settings.revenueRatio = revenueRatio;
+  const { osrAdvanceDays, scheduleHistoryLookbackWeeks, operationsReportingStartMonth } = req.body;
   if (osrAdvanceDays !== undefined) {
     const parsedDays = Number(osrAdvanceDays);
     if (!Number.isInteger(parsedDays) || parsedDays < 0 || parsedDays > 7) {

@@ -2,7 +2,7 @@ import RunCutDay from "../models/RunCutDay.js";
 import DailyIssueLog from "../models/DailyIssueLog.js";
 import Division from "../models/Division.js";
 import { DAYS_OF_WEEK, computeHours } from "./hours.js";
-import { getEffectiveThresholds } from "./thresholds.js";
+import { loadThresholdHistory, resolveThresholdsFromHistory } from "./thresholds.js";
 import { syncAutoIssuesBulk } from "./autoIssueSync.js";
 import { todayInTimezone } from "./timezone.js";
 import { restoreCoverageOwnedByStandbyDays } from "./standbyCoveragePersistence.js";
@@ -29,7 +29,12 @@ const dayOfWeekFor = (date) => DAYS_OF_WEEK[new Date(date).getUTCDay()];
 export const projectAssignment = async (runCut, userId, { horizonDays = PROJECTION_HORIZON_DAYS } = {}) => {
   const divisionDoc = await Division.findById(runCut.division);
   if (!divisionDoc || divisionDoc.active === false) return;
-  const thresholds = await getEffectiveThresholds(divisionDoc);
+  const thresholdHistory = await loadThresholdHistory(divisionDoc._id);
+  const thresholdsForDate = (date) =>
+    resolveThresholdsFromHistory(thresholdHistory, date, {
+      breakMinutes: divisionDoc.thresholds.breakMinutes,
+      revenueRatio: divisionDoc.thresholds.revenueRatio,
+    });
   const start = todayInTimezone(divisionDoc?.timezone);
 
   const dates = [];
@@ -59,55 +64,56 @@ export const projectAssignment = async (runCut, userId, { horizonDays = PROJECTI
 
   if (!keepDates.length) return;
 
-  const { serviceHours, revenueHours } = computeHours({
-    startTime: runCut.startTime,
-    endTime: runCut.endTime,
-    status: runCut.status,
-    ...thresholds,
-  });
-
   await RunCutDay.bulkWrite(
-    keepDates.map((date) => ({
-      updateOne: {
-        filter: { division: runCut.division, route: runCut.route, date },
-        update: [
-          {
-            $set: {
-              division: { $ifNull: ["$division", runCut.division] },
-              route: { $ifNull: ["$route", runCut.route] },
-              date: { $ifNull: ["$date", date] },
-              operator: { $cond: ["$overrides.operator", "$operator", runCut.operator] },
-              vehicle: { $cond: ["$overrides.vehicle", "$vehicle", runCut.vehicle] },
-              pulloutAddress: {
-                $cond: ["$overrides.pulloutAddress", "$pulloutAddress", runCut.pulloutAddress],
+    keepDates.map((date) => {
+      const { serviceHours, revenueHours } = computeHours({
+        startTime: runCut.startTime,
+        endTime: runCut.endTime,
+        status: runCut.status,
+        ...thresholdsForDate(date),
+      });
+      return {
+        updateOne: {
+          filter: { division: runCut.division, route: runCut.route, date },
+          update: [
+            {
+              $set: {
+                division: { $ifNull: ["$division", runCut.division] },
+                route: { $ifNull: ["$route", runCut.route] },
+                date: { $ifNull: ["$date", date] },
+                operator: { $cond: ["$overrides.operator", "$operator", runCut.operator] },
+                vehicle: { $cond: ["$overrides.vehicle", "$vehicle", runCut.vehicle] },
+                pulloutAddress: {
+                  $cond: ["$overrides.pulloutAddress", "$pulloutAddress", runCut.pulloutAddress],
+                },
+                startTime: { $cond: ["$overrides.startTime", "$startTime", runCut.startTime] },
+                endTime: { $cond: ["$overrides.endTime", "$endTime", runCut.endTime] },
+                updatedBy: userId,
+                status: { $cond: ["$overrides.status", "$status", runCut.status] },
+                serviceHours: {
+                  $cond: [
+                    { $or: ["$overrides.status", "$overrides.startTime", "$overrides.endTime"] },
+                    "$serviceHours",
+                    serviceHours,
+                  ],
+                },
+                revenueHours: {
+                  $cond: [
+                    { $or: ["$overrides.status", "$overrides.startTime", "$overrides.endTime"] },
+                    "$revenueHours",
+                    revenueHours,
+                  ],
+                },
+                clientNotes: { $cond: ["$overrides.clientNotes", "$clientNotes", runCut.clientNotes] },
+                disruptionType: { $cond: ["$overrides.disruption", "$disruptionType", runCut.disruptionType] },
+                disruptionNotes: { $cond: ["$overrides.disruption", "$disruptionNotes", runCut.disruptionNotes] },
               },
-              startTime: { $cond: ["$overrides.startTime", "$startTime", runCut.startTime] },
-              endTime: { $cond: ["$overrides.endTime", "$endTime", runCut.endTime] },
-              updatedBy: userId,
-              status: { $cond: ["$overrides.status", "$status", runCut.status] },
-              serviceHours: {
-                $cond: [
-                  { $or: ["$overrides.status", "$overrides.startTime", "$overrides.endTime"] },
-                  "$serviceHours",
-                  serviceHours,
-                ],
-              },
-              revenueHours: {
-                $cond: [
-                  { $or: ["$overrides.status", "$overrides.startTime", "$overrides.endTime"] },
-                  "$revenueHours",
-                  revenueHours,
-                ],
-              },
-              clientNotes: { $cond: ["$overrides.clientNotes", "$clientNotes", runCut.clientNotes] },
-              disruptionType: { $cond: ["$overrides.disruption", "$disruptionType", runCut.disruptionType] },
-              disruptionNotes: { $cond: ["$overrides.disruption", "$disruptionNotes", runCut.disruptionNotes] },
             },
-          },
-        ],
-        upsert: true,
-      },
-    }))
+          ],
+          upsert: true,
+        },
+      };
+    })
   );
 
   const runCutDays = await RunCutDay.find({

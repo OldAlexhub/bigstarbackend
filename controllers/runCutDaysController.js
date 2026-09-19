@@ -241,7 +241,7 @@ export const setRunCutDayDeployed = async (req, res) => {
           }
         );
         coveredRunCutDay.overrides.status = true;
-        const thresholds = await getEffectiveThresholds(divisionDoc);
+        const thresholds = await getEffectiveThresholds(divisionDoc, coveredRunCutDay.date);
         const { serviceHours, revenueHours } = computeHours({
           startTime: coveredRunCutDay.startTime,
           endTime: coveredRunCutDay.endTime,
@@ -461,7 +461,7 @@ export const updateRunCutDayException = async (req, res) => {
   }
 
   if (statusWasUpdated || startTime !== undefined || endTime !== undefined) {
-    const thresholds = await getEffectiveThresholds(divisionDoc);
+    const thresholds = await getEffectiveThresholds(divisionDoc, runCutDay.date);
     const { serviceHours, revenueHours } = computeHours({
       startTime: runCutDay.startTime,
       endTime: runCutDay.endTime,
@@ -559,7 +559,7 @@ export const createExtraRunCutDay = async (req, res) => {
       const vehicleConflict = await findVehicleConflictOnDate({ vehicle, date: dayDate, startTime, endTime, status: "add_rte" });
       if (vehicleConflict) throw httpError(409, vehicleConflictMessage(vehicleConflict));
 
-      const thresholds = await getEffectiveThresholds(divisionDoc);
+      const thresholds = await getEffectiveThresholds(divisionDoc, dayDate);
       const { serviceHours, revenueHours } = computeHours({
         startTime,
         endTime,

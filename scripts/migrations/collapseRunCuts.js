@@ -70,7 +70,7 @@ const run = async () => {
     const status = todayRunCutDay?.status || "active";
 
     const divisionDoc = await Division.findById(division);
-    const thresholds = await getEffectiveThresholds(divisionDoc);
+    const thresholds = await getEffectiveThresholds(divisionDoc, today);
     const { serviceHours, revenueHours } = computeHours({
       startTime: chosen.startTime,
       endTime: chosen.endTime,
