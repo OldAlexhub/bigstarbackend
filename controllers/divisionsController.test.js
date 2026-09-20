@@ -53,6 +53,39 @@ test("ordinary division lists hide retired divisions while ELT Settings can incl
   }
 });
 
+test("division lists expose the threshold version effective today even when the cached value is older", async () => {
+  const originalFind = Division.find;
+  const originalHistoryFind = DivisionThresholdChange.find;
+  const division = {
+    _id: "division-1",
+    code: "DIV_1",
+    timezone: "America/New_York",
+    thresholds: { breakMinutes: 30, revenueRatio: 0.9 },
+  };
+  Division.find = () => ({
+    sort() { return this; },
+    populate() { return Promise.resolve([division]); },
+  });
+  DivisionThresholdChange.find = () => ({
+    lean: async () => [{
+      division: "division-1",
+      effectiveDate: new Date("2000-01-01T00:00:00.000Z"),
+      breakMinutes: 45,
+      revenueRatio: 1,
+    }],
+  });
+
+  try {
+    const response = responseRecorder();
+    await listDivisions({ user: { role: "ELT" }, query: {} }, response);
+    assert.deepEqual(response.body.divisions[0].thresholds, { breakMinutes: 45, revenueRatio: 1 });
+    assert.deepEqual(division.thresholds, { breakMinutes: 30, revenueRatio: 0.9 });
+  } finally {
+    Division.find = originalFind;
+    DivisionThresholdChange.find = originalHistoryFind;
+  }
+});
+
 test("creating a division immediately seeds its default Operations KPI settings and threshold history", async () => {
   const originalCreate = Division.create;
   const originalBulkWrite = OperationsKpiSetting.bulkWrite;
@@ -222,9 +255,97 @@ test("scheduling a future break minutes / revenue ratio change does not affect w
   }
 });
 
+test("a future threshold can return to today's values after an intermediate scheduled change", async () => {
+  const originalFindById = Division.findById;
+  const originalUpsert = DivisionThresholdChange.findOneAndUpdate;
+  const originalHistoryFind = DivisionThresholdChange.find;
+  const originalRunCutFind = RunCut.find;
+  const division = {
+    _id: "division-1",
+    timezone: "America/New_York",
+    thresholds: { breakMinutes: 30, revenueRatio: 0.9 },
+    async save() {},
+  };
+  const history = [{
+    _id: "scheduled-change",
+    division: "division-1",
+    effectiveDate: new Date("2099-01-01T00:00:00.000Z"),
+    breakMinutes: 45,
+    revenueRatio: 1,
+  }];
+  let savedChange = null;
+  Division.findById = async () => division;
+  DivisionThresholdChange.find = () => ({
+    sort: () => ({ lean: async () => [...history].sort((a, b) => b.effectiveDate - a.effectiveDate) }),
+  });
+  DivisionThresholdChange.findOneAndUpdate = async (filter, update) => {
+    savedChange = { ...filter, ...update };
+    history.push({ ...filter, ...update });
+  };
+  RunCut.find = async () => [];
+
+  try {
+    const response = responseRecorder();
+    await updateDivision(
+      {
+        params: { id: "division-1" },
+        body: { thresholds: { breakMinutes: 30, revenueRatio: 0.9, effectiveDate: "2099-02-01" } },
+        user: { role: "ELT", _id: "user-1" },
+      },
+      response
+    );
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(savedChange.effectiveDate.toISOString().slice(0, 10), "2099-02-01");
+    assert.equal(savedChange.breakMinutes, 30);
+    assert.equal(savedChange.revenueRatio, 0.9);
+    assert.equal(division.thresholds.breakMinutes, 30);
+    assert.equal(division.thresholds.revenueRatio, 0.9);
+  } finally {
+    Division.findById = originalFindById;
+    DivisionThresholdChange.findOneAndUpdate = originalUpsert;
+    DivisionThresholdChange.find = originalHistoryFind;
+    RunCut.find = originalRunCutFind;
+  }
+});
+
+test("past threshold dates are rejected so historical calculations cannot be rewritten", async () => {
+  const originalFindById = Division.findById;
+  const originalUpsert = DivisionThresholdChange.findOneAndUpdate;
+  const division = {
+    _id: "division-1",
+    timezone: "America/New_York",
+    thresholds: { breakMinutes: 30, revenueRatio: 0.9 },
+    async save() {},
+  };
+  let upsertCalled = false;
+  Division.findById = async () => division;
+  DivisionThresholdChange.findOneAndUpdate = async () => { upsertCalled = true; };
+
+  try {
+    const response = responseRecorder();
+    await updateDivision(
+      {
+        params: { id: "division-1" },
+        body: { thresholds: { breakMinutes: 45, revenueRatio: 1, effectiveDate: "2000-01-01" } },
+        user: { role: "ELT", _id: "user-1" },
+      },
+      response
+    );
+
+    assert.equal(response.statusCode, 400);
+    assert.match(response.body.message, /cannot be in the past/i);
+    assert.equal(upsertCalled, false);
+  } finally {
+    Division.findById = originalFindById;
+    DivisionThresholdChange.findOneAndUpdate = originalUpsert;
+  }
+});
+
 test("resaving a division's unchanged break minutes and revenue ratio does not schedule a threshold change or recompute run cuts", async () => {
   const originalFindById = Division.findById;
   const originalUpsert = DivisionThresholdChange.findOneAndUpdate;
+  const originalHistoryFind = DivisionThresholdChange.find;
   const originalRunCutFind = RunCut.find;
   const division = {
     _id: "division-1",
@@ -236,6 +357,7 @@ test("resaving a division's unchanged break minutes and revenue ratio does not s
   let upsertCalled = false;
   let runCutFindCalled = false;
   Division.findById = async () => division;
+  DivisionThresholdChange.find = () => ({ sort: () => ({ lean: async () => [] }) });
   DivisionThresholdChange.findOneAndUpdate = async () => { upsertCalled = true; return null; };
   RunCut.find = async () => { runCutFindCalled = true; return []; };
 
@@ -260,6 +382,7 @@ test("resaving a division's unchanged break minutes and revenue ratio does not s
   } finally {
     Division.findById = originalFindById;
     DivisionThresholdChange.findOneAndUpdate = originalUpsert;
+    DivisionThresholdChange.find = originalHistoryFind;
     RunCut.find = originalRunCutFind;
   }
 });

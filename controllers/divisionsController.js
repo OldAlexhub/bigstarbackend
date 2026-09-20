@@ -24,7 +24,12 @@ import TeamPost from "../models/TeamPost.js";
 import { canAccessDivision, divisionFilter } from "../middleware/access.js";
 import { ensureDefaultKpiSettings } from "../utils/operationsReporting.js";
 import { runInTransaction } from "../utils/transaction.js";
-import { getEffectiveThresholds } from "../utils/thresholds.js";
+import {
+  loadThresholdHistory,
+  parseThresholdDate,
+  resolveThresholdsFromHistory,
+  thresholdDateKey,
+} from "../utils/thresholds.js";
 import { recomputeDivisionRunCutHours } from "../utils/recomputeRunCutHours.js";
 import { todayInTimezone } from "../utils/timezone.js";
 
@@ -51,6 +56,110 @@ export const DIVISION_OWNED_MODELS = [
   TeamPost,
 ];
 
+const normalizedHistory = (history) => history.map((entry) => ({
+  ...entry,
+  effectiveDate: new Date(entry.effectiveDate),
+}));
+
+const baselineDateBefore = (division, effectiveDate) => {
+  const createdDate = division.createdAt
+    ? parseThresholdDate(thresholdDateKey(division.createdAt))
+    : null;
+  if (createdDate && createdDate < effectiveDate) return createdDate;
+  const dayBefore = new Date(effectiveDate);
+  dayBefore.setUTCDate(dayBefore.getUTCDate() - 1);
+  return dayBefore;
+};
+
+// Adds or updates one dated threshold version. Past dates are deliberately
+// locked: new policy can start today or later, while prior reported days keep
+// the values that were in force for them.
+const applyThresholdChange = async (division, thresholds, userId) => {
+  const today = todayInTimezone(division.timezone);
+  const effectiveDate = thresholds.effectiveDate
+    ? parseThresholdDate(thresholds.effectiveDate)
+    : today;
+  if (!effectiveDate) {
+    return { error: "Choose a valid start date for this break minutes / revenue ratio change." };
+  }
+  if (effectiveDate < today) {
+    return { error: "The start date cannot be in the past. Past settings are locked to preserve reported history." };
+  }
+
+  let history = normalizedHistory(await loadThresholdHistory(division._id));
+  const fallback = {
+    breakMinutes: division.thresholds.breakMinutes,
+    revenueRatio: division.thresholds.revenueRatio,
+  };
+  const effectiveAtDate = resolveThresholdsFromHistory(history, effectiveDate, fallback);
+  const breakMinutes = thresholds.breakMinutes === undefined
+    ? effectiveAtDate.breakMinutes
+    : Number(thresholds.breakMinutes);
+  const revenueRatio = thresholds.revenueRatio === undefined
+    ? effectiveAtDate.revenueRatio
+    : Number(thresholds.revenueRatio);
+
+  if (
+    thresholds.breakMinutes === null ||
+    thresholds.breakMinutes === "" ||
+    !Number.isFinite(breakMinutes)
+  ) {
+    return { error: "Break minutes is required for every division." };
+  }
+  if (
+    thresholds.revenueRatio === null ||
+    thresholds.revenueRatio === "" ||
+    !Number.isFinite(revenueRatio)
+  ) {
+    return { error: "Revenue ratio is required for every division." };
+  }
+
+  const dateKey = thresholdDateKey(effectiveDate);
+  const existing = history.find((entry) => thresholdDateKey(entry.effectiveDate) === dateKey);
+  if (
+    effectiveAtDate.breakMinutes === breakMinutes &&
+    effectiveAtDate.revenueRatio === revenueRatio &&
+    (!existing || (existing.breakMinutes === breakMinutes && existing.revenueRatio === revenueRatio))
+  ) {
+    return { changed: false, history };
+  }
+
+  // Older divisions may predate the versioned history collection. Preserve
+  // their original cached values as a baseline before inserting the first
+  // change, so dates before this change never fall back to the new value.
+  if (!history.length) {
+    const baselineDate = baselineDateBefore(division, effectiveDate);
+    await DivisionThresholdChange.findOneAndUpdate(
+      { division: division._id, effectiveDate: baselineDate },
+      {
+        breakMinutes: fallback.breakMinutes,
+        revenueRatio: fallback.revenueRatio,
+        createdBy: userId,
+      },
+      { upsert: true, runValidators: true }
+    );
+    history = [{
+      division: division._id,
+      effectiveDate: baselineDate,
+      breakMinutes: fallback.breakMinutes,
+      revenueRatio: fallback.revenueRatio,
+      createdBy: userId,
+    }];
+  }
+
+  await DivisionThresholdChange.findOneAndUpdate(
+    { division: division._id, effectiveDate },
+    { breakMinutes, revenueRatio, createdBy: userId },
+    { upsert: true, runValidators: true }
+  );
+
+  history = normalizedHistory(await loadThresholdHistory(division._id));
+  const effectiveToday = resolveThresholdsFromHistory(history, today, fallback);
+  division.thresholds.breakMinutes = effectiveToday.breakMinutes;
+  division.thresholds.revenueRatio = effectiveToday.revenueRatio;
+  return { changed: true, history };
+};
+
 export const listDivisions = async (req, res) => {
   const includeInactive = req.query.includeInactive === "1" && req.user.role === "ELT";
   const divisions = await Division.find({
@@ -59,7 +168,45 @@ export const listDivisions = async (req, res) => {
   })
     .sort({ code: 1 })
     .populate("parentDivision", "code name");
-  res.json({ divisions });
+
+  const divisionIds = divisions.map((division) => division._id);
+  const allHistory = divisionIds.length
+    ? normalizedHistory(await DivisionThresholdChange.find({ division: { $in: divisionIds } }).lean())
+    : [];
+  const historyByDivision = new Map();
+  for (const entry of allHistory) {
+    const key = String(entry.division);
+    if (!historyByDivision.has(key)) historyByDivision.set(key, []);
+    historyByDivision.get(key).push(entry);
+  }
+  for (const history of historyByDivision.values()) {
+    history.sort((a, b) => b.effectiveDate - a.effectiveDate);
+  }
+
+  res.json({
+    divisions: divisions.map((division) => {
+      const item = typeof division.toObject === "function" ? division.toObject() : division;
+      const history = historyByDivision.get(String(item._id)) || [];
+      return {
+        ...item,
+        thresholds: resolveThresholdsFromHistory(
+          history,
+          todayInTimezone(item.timezone),
+          item.thresholds
+        ),
+      };
+    }),
+  });
+};
+
+export const listDivisionThresholds = async (req, res) => {
+  const filter = req.user.role === "ELT"
+    ? {}
+    : { division: { $in: req.user.divisionAccess || [] } };
+  const thresholds = await DivisionThresholdChange.find(filter)
+    .sort({ effectiveDate: -1, createdAt: -1 })
+    .lean();
+  res.json({ thresholds });
 };
 
 export const createDivision = async (req, res) => {
@@ -126,38 +273,14 @@ export const updateDivision = async (req, res) => {
   }
   // A break minutes / revenue ratio change takes effect from a chosen start
   // date (default: today) instead of overwriting the current value outright,
-  // so a change scheduled for the future doesn't touch what's shown for
-  // dates before it, and a change effective today or earlier applies right
-  // away. See server/models/DivisionThresholdChange.js and
+  // so a change scheduled for today or the future doesn't touch dates before
+  // it. Past start dates are rejected. See server/models/DivisionThresholdChange.js and
   // server/utils/thresholds.js for how that history gets resolved.
-  let pendingThresholdChange = null;
+  let thresholdChangeMade = false;
   if (thresholds !== undefined && (thresholds.breakMinutes !== undefined || thresholds.revenueRatio !== undefined)) {
-    let breakMinutes = division.thresholds.breakMinutes;
-    let revenueRatio = division.thresholds.revenueRatio;
-    if (thresholds.breakMinutes !== undefined) {
-      breakMinutes = Number(thresholds.breakMinutes);
-      if (thresholds.breakMinutes === null || thresholds.breakMinutes === "" || !Number.isFinite(breakMinutes)) {
-        return res.status(400).json({ message: "Break minutes is required for every division." });
-      }
-    }
-    if (thresholds.revenueRatio !== undefined) {
-      revenueRatio = Number(thresholds.revenueRatio);
-      if (thresholds.revenueRatio === null || thresholds.revenueRatio === "" || !Number.isFinite(revenueRatio)) {
-        return res.status(400).json({ message: "Revenue ratio is required for every division." });
-      }
-    }
-    // Editing the division for an unrelated reason (renaming it, changing
-    // its timezone) re-sends its current break minutes / revenue ratio
-    // unchanged — only actually schedule a change, and only then recompute
-    // every run cut in the division, when a submitted value is different.
-    if (breakMinutes !== division.thresholds.breakMinutes || revenueRatio !== division.thresholds.revenueRatio) {
-      let effectiveDate = thresholds.effectiveDate ? new Date(thresholds.effectiveDate) : todayInTimezone(division.timezone);
-      if (Number.isNaN(effectiveDate.getTime())) {
-        return res.status(400).json({ message: "Choose a valid start date for this break minutes / revenue ratio change." });
-      }
-      effectiveDate = new Date(Date.UTC(effectiveDate.getUTCFullYear(), effectiveDate.getUTCMonth(), effectiveDate.getUTCDate()));
-      pendingThresholdChange = { breakMinutes, revenueRatio, effectiveDate };
-    }
+    const result = await applyThresholdChange(division, thresholds, req.user._id);
+    if (result.error) return res.status(400).json({ message: result.error });
+    thresholdChangeMade = result.changed;
   }
   if (pulloutAddressRules !== undefined) {
     if (pulloutAddressRules.standbyKeepsRouteAddress !== undefined) {
@@ -175,31 +298,35 @@ export const updateDivision = async (req, res) => {
     if (timezone !== undefined) division.timezone = timezone;
   }
 
-  if (pendingThresholdChange) {
-    await DivisionThresholdChange.findOneAndUpdate(
-      { division: division._id, effectiveDate: pendingThresholdChange.effectiveDate },
-      {
-        breakMinutes: pendingThresholdChange.breakMinutes,
-        revenueRatio: pendingThresholdChange.revenueRatio,
-        createdBy: req.user._id,
-      },
-      { upsert: true }
-    );
-    // Cache what's effective as of today on the division itself — if the
-    // change starts in the future this stays at the current value, since
-    // that's still what's true today.
-    const todayEffective = await getEffectiveThresholds(division, todayInTimezone(division.timezone));
-    division.thresholds.breakMinutes = todayEffective.breakMinutes;
-    division.thresholds.revenueRatio = todayEffective.revenueRatio;
-  }
-
   await division.save();
 
-  if (pendingThresholdChange) {
+  if (thresholdChangeMade) {
     await recomputeDivisionRunCutHours(division, req.user._id);
   }
   if (active === true) await ensureDefaultKpiSettings([division]);
   res.json({ division });
+};
+
+export const saveDivisionThreshold = async (req, res) => {
+  const division = await Division.findById(req.params.id);
+  if (!division) return res.status(404).json({ message: "Division not found" });
+  if (!canAccessDivision(req.user, division._id)) {
+    return res.status(403).json({ message: "No access to this division" });
+  }
+  if (division.active === false) {
+    return res.status(400).json({ message: "Restore this division before scheduling a settings change." });
+  }
+
+  const result = await applyThresholdChange(division, req.body || {}, req.user._id);
+  if (result.error) return res.status(400).json({ message: result.error });
+
+  await division.save();
+  if (result.changed) {
+    await recomputeDivisionRunCutHours(division, req.user._id);
+  }
+
+  const thresholds = await loadThresholdHistory(division._id);
+  res.json({ division, thresholds, changed: result.changed });
 };
 
 export const deleteDivision = async (req, res) => {
