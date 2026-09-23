@@ -27,8 +27,8 @@ export const rolloverAssignments = async () => {
 };
 
 export const scheduleAssignmentRollover = () => {
-  rolloverAssignments().catch((error) => console.error("Assignment rollover failed:", error));
+  rolloverAssignments().catch(() => console.error("Assignment rollover failed."));
   return setInterval(() => {
-    rolloverAssignments().catch((error) => console.error("Assignment rollover failed:", error));
+    rolloverAssignments().catch(() => console.error("Assignment rollover failed."));
   }, 24 * 60 * 60 * 1000);
 };

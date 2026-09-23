@@ -1,5 +1,25 @@
 import mongoose from "mongoose";
 
+export const RETENTION_UNITS = ["days", "months", "years", "indefinite"];
+
+const retentionPeriod = (defaultValue) => ({
+  value: {
+    type: Number,
+    min: 1,
+    max: 10000,
+    validate: {
+      validator: Number.isInteger,
+      message: "Retention values must be whole numbers",
+    },
+    default: defaultValue,
+  },
+  unit: {
+    type: String,
+    enum: RETENTION_UNITS,
+    default: "years",
+  },
+});
+
 const settingsSchema = new mongoose.Schema(
   {
     osrAdvanceDays: {
@@ -25,6 +45,13 @@ const settingsSchema = new mongoose.Schema(
     operationsReportingStartMonth: {
       type: String,
       default: () => new Date().toISOString().slice(0, 7),
+    },
+    dataRetention: {
+      enabled: { type: Boolean, default: false },
+      operationalHistory: retentionPeriod(7),
+      auditLogs: retentionPeriod(7),
+      teamPosts: retentionPeriod(3),
+      networkSubmissionStaging: retentionPeriod(1),
     },
   },
   { timestamps: true }

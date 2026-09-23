@@ -122,7 +122,7 @@ const run = async () => {
   process.exit(0);
 };
 
-run().catch((error) => {
-  console.error("Migration failed:", error);
+run().catch(() => {
+  console.error("Migration failed.");
   process.exit(1);
 });

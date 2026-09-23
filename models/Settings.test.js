@@ -27,3 +27,25 @@ test("Schedule History lookback weeks accepts only values from one through twelv
   await assert.rejects(new Settings({ scheduleHistoryLookbackWeeks: 13 }).validate(), /maximum allowed value/);
   await assert.rejects(new Settings({ scheduleHistoryLookbackWeeks: 0 }).validate(), /minimum allowed value/);
 });
+
+test("data retention defaults are conservative and disabled until ELT enables them", () => {
+  const settings = new Settings();
+  assert.equal(settings.dataRetention.enabled, false);
+  assert.equal(settings.dataRetention.operationalHistory.value, 7);
+  assert.equal(settings.dataRetention.operationalHistory.unit, "years");
+  assert.equal(settings.dataRetention.auditLogs.value, 7);
+  assert.equal(settings.dataRetention.auditLogs.unit, "years");
+  assert.equal(settings.dataRetention.teamPosts.value, 3);
+  assert.equal(settings.dataRetention.teamPosts.unit, "years");
+  assert.equal(settings.dataRetention.networkSubmissionStaging.value, 1);
+  assert.equal(settings.dataRetention.networkSubmissionStaging.unit, "years");
+});
+
+test("retention periods support days, months, years, and retaining indefinitely", async () => {
+  const settings = new Settings();
+  settings.dataRetention.operationalHistory = { value: 30, unit: "days" };
+  settings.dataRetention.auditLogs = { value: 18, unit: "months" };
+  settings.dataRetention.teamPosts = { value: 2, unit: "years" };
+  settings.dataRetention.networkSubmissionStaging = { value: 1, unit: "indefinite" };
+  await settings.validate();
+});

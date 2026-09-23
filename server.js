@@ -7,10 +7,13 @@ import mongoose from "mongoose";
 import connectTodb from "./db/connectTodb.js";
 import { assertTransactionSupport } from "./db/transactionSupport.js";
 import { validateEnvironment } from "./config/environment.js";
+import { createRequestOriginProtection } from "./middleware/requestOrigin.js";
+import { createErrorHandler } from "./middleware/errorHandler.js";
 import RunCutDay from "./models/RunCutDay.js";
 import LoginRateLimitCounter from "./models/LoginRateLimitCounter.js";
 import ReallocationRequest from "./models/ReallocationRequest.js";
 import TeamPost from "./models/TeamPost.js";
+import RetentionCleanupLog from "./models/RetentionCleanupLog.js";
 import Operator from "./models/Operator.js";
 import Vehicle from "./models/Vehicle.js";
 import RunCut from "./models/RunCut.js";
@@ -43,6 +46,7 @@ import { scheduleWeeklyFinalization } from "./jobs/finalizeWeeks.js";
 import { scheduleAssignmentRollover } from "./jobs/rolloverAssignments.js";
 import { scheduleOperationsReconciliation } from "./jobs/reconcileOperationsReporting.js";
 import { scheduleReallocationApplications } from "./jobs/applyReallocationRequests.js";
+import { scheduleDataRetentionCleanup } from "./jobs/dataRetention.js";
 import { backfillAssignmentRosters } from "./utils/backfillAssignmentRosters.js";
 
 dotenv.config({ quiet: true });
@@ -69,6 +73,7 @@ app.use((_req, res, next) => {
   res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
   next();
 });
+app.use(createRequestOriginProtection(config));
 app.use(cookieParser());
 app.use(express.json({ limit: "10mb" }));
 
@@ -106,6 +111,9 @@ app.use("/api/reallocation-requests", reallocationRequestsRoutes);
 app.use("/api/team-posts", teamPostsRoutes);
 app.use("/api/report-builder", reportBuilderRoutes);
 
+app.use((_req, res) => res.status(404).json({ message: "Not found" }));
+app.use(createErrorHandler(config));
+
 let httpServer;
 let shuttingDown = false;
 const scheduledJobs = [];
@@ -132,8 +140,8 @@ const shutdown = async (signal) => {
     await mongoose.disconnect();
     clearTimeout(forcedExit);
     process.exit(0);
-  } catch (error) {
-    console.error("Graceful shutdown failed:", error);
+  } catch {
+    console.error("Graceful shutdown failed.");
     process.exit(1);
   }
 };
@@ -157,6 +165,7 @@ const start = async () => {
   await LoginRateLimitCounter.createIndexes();
   await ReallocationRequest.createIndexes();
   await TeamPost.createIndexes();
+  await RetentionCleanupLog.createIndexes();
   if (shuttingDown) return;
   httpServer = app.listen(config.port, () => {
     console.log(`Server is running on port ${config.port}`);
@@ -166,12 +175,13 @@ const start = async () => {
     scheduleWeeklyFinalization(),
     scheduleAssignmentRollover(),
     scheduleOperationsReconciliation(),
-    scheduleReallocationApplications()
+    scheduleReallocationApplications(),
+    scheduleDataRetentionCleanup()
   );
 };
 
-start().catch(async (error) => {
-  console.error(`Server startup failed: ${error.message}`);
+start().catch(async () => {
+  console.error("Server startup failed.");
   try {
     await mongoose.disconnect();
   } finally {

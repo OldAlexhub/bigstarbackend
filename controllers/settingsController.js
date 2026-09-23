@@ -1,4 +1,4 @@
-import Settings from "../models/Settings.js";
+import Settings, { RETENTION_UNITS } from "../models/Settings.js";
 import mongoose from "mongoose";
 import Division from "../models/Division.js";
 import OperationsKpiSetting from "../models/OperationsKpiSetting.js";
@@ -8,14 +8,58 @@ import { divisionFilter } from "../middleware/access.js";
 import { KPI_DEFINITIONS, KPI_KEYS, isCalendarMonth } from "../utils/operationsKpis.js";
 import { ensureDefaultKpiSettings, queueOperationsRangeRefresh } from "../utils/operationsReporting.js";
 
+const retentionKeys = ["operationalHistory", "auditLogs", "teamPosts", "networkSubmissionStaging"];
+
+const retentionResponse = (settings) => ({
+  enabled: Boolean(settings.dataRetention?.enabled),
+  ...Object.fromEntries(retentionKeys.map((key) => [key, {
+    value: settings.dataRetention?.[key]?.value,
+    unit: settings.dataRetention?.[key]?.unit,
+  }])),
+});
+
+export const settingsResponse = (settings, { includeRetention = false } = {}) => ({
+  osrAdvanceDays: settings.osrAdvanceDays,
+  scheduleHistoryLookbackWeeks: settings.scheduleHistoryLookbackWeeks,
+  operationsReportingStartMonth: settings.operationsReportingStartMonth,
+  ...(includeRetention ? { dataRetention: retentionResponse(settings) } : {}),
+});
+
+const validateRetention = (input, settings) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { error: "Data retention settings are invalid." };
+  }
+  if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
+    return { error: "Data retention enabled must be true or false." };
+  }
+
+  const next = {
+    enabled: input.enabled ?? Boolean(settings.dataRetention?.enabled),
+  };
+  for (const key of retentionKeys) {
+    const current = settings.dataRetention?.[key];
+    const candidate = input[key] ?? current;
+    const value = Number(candidate?.value);
+    const unit = candidate?.unit;
+    if (!Number.isInteger(value) || value < 1 || value > 10000) {
+      return { error: "Retention values must be whole numbers from 1 through 10000." };
+    }
+    if (!RETENTION_UNITS.includes(unit)) {
+      return { error: "Choose Days, Months, Years, or Retain Indefinitely for every retention setting." };
+    }
+    next[key] = { value, unit };
+  }
+  return { value: next };
+};
+
 export const getSettings = async (req, res) => {
   const settings = await Settings.getSingleton();
-  res.json({ settings });
+  res.json({ settings: settingsResponse(settings, { includeRetention: req.user.role === "ELT" }) });
 };
 
 export const updateSettings = async (req, res) => {
   const settings = await Settings.getSingleton();
-  const { osrAdvanceDays, scheduleHistoryLookbackWeeks, operationsReportingStartMonth } = req.body;
+  const { osrAdvanceDays, scheduleHistoryLookbackWeeks, operationsReportingStartMonth, dataRetention } = req.body;
   if (osrAdvanceDays !== undefined) {
     const parsedDays = Number(osrAdvanceDays);
     if (!Number.isInteger(parsedDays) || parsedDays < 0 || parsedDays > 7) {
@@ -36,8 +80,13 @@ export const updateSettings = async (req, res) => {
     }
     settings.operationsReportingStartMonth = operationsReportingStartMonth;
   }
+  if (dataRetention !== undefined) {
+    const retention = validateRetention(dataRetention, settings);
+    if (retention.error) return res.status(400).json({ message: retention.error });
+    settings.dataRetention = retention.value;
+  }
   await settings.save();
-  res.json({ settings });
+  res.json({ settings: settingsResponse(settings, { includeRetention: true }) });
 };
 
 export const getOperationsKpiSettings = async (req, res) => {

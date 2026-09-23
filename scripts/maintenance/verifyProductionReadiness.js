@@ -36,8 +36,8 @@ const main = async () => {
 };
 
 main()
-  .catch((error) => {
-    console.error(`Production preflight failed: ${error.message}`);
+  .catch(() => {
+    console.error("Production preflight failed.");
     process.exitCode = 1;
   })
   .finally(() => mongoose.disconnect());

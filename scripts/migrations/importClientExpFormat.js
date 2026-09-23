@@ -289,7 +289,7 @@ const run = async () => {
   process.exit(0);
 };
 
-run().catch((error) => {
-  console.error("Import failed:", error);
+run().catch(() => {
+  console.error("Import failed.");
   process.exit(1);
 });

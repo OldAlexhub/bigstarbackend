@@ -24,7 +24,7 @@ const run = async () => {
   process.exit(0);
 };
 
-run().catch((error) => {
-  console.error("Daily issue identity migration failed:", error);
+run().catch(() => {
+  console.error("Daily issue identity migration failed.");
   process.exit(1);
 });

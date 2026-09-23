@@ -16,7 +16,7 @@ export const logDeploymentActivity = async ({ division, user, action, summary, r
       reason: reason || "",
       changes: changes || [],
     });
-  } catch (error) {
-    console.error("Failed to write deployment activity log:", error);
+  } catch {
+    console.error("Failed to write deployment activity log.");
   }
 };

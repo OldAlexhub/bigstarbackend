@@ -60,8 +60,8 @@ export const finalizePastWeeks = async () => {
 };
 
 export const scheduleWeeklyFinalization = () => {
-  finalizePastWeeks().catch((error) => console.error("Week finalization failed:", error));
+  finalizePastWeeks().catch(() => console.error("Week finalization failed."));
   return setInterval(() => {
-    finalizePastWeeks().catch((error) => console.error("Week finalization failed:", error));
+    finalizePastWeeks().catch(() => console.error("Week finalization failed."));
   }, 24 * 60 * 60 * 1000);
 };

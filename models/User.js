@@ -29,6 +29,7 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: true,
+      select: false,
     },
     name: {
       type: String,
@@ -107,16 +108,11 @@ userSchema.methods.comparePassword = function (candidate) {
   return bcrypt.compare(candidate, this.password);
 };
 
-userSchema.methods.toPublicJSON = function () {
+userSchema.methods.toSessionJSON = function () {
   return {
     id: this._id,
     username: this.username,
     name: this.name,
-    email: this.email,
-    phone: this.phone,
-    title: this.title,
-    department: this.department,
-    active: this.active,
     role: this.role,
     sections: this.sections,
     pageAccess: this.pageAccess,
@@ -127,6 +123,17 @@ userSchema.methods.toPublicJSON = function () {
         ? Object.fromEntries(this.pageAccessLevels)
         : this.pageAccessLevels || {},
     divisionAccess: this.divisionAccess,
+  };
+};
+
+userSchema.methods.toPublicJSON = function () {
+  return {
+    ...this.toSessionJSON(),
+    email: this.email,
+    phone: this.phone,
+    title: this.title,
+    department: this.department,
+    active: this.active,
   };
 };
 

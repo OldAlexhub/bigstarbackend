@@ -48,7 +48,7 @@ const run = async () => {
   process.exit(0);
 };
 
-run().catch((error) => {
-  console.error("Seed failed:", error);
+run().catch(() => {
+  console.error("Seed failed.");
   process.exit(1);
 });

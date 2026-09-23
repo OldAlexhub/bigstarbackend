@@ -381,7 +381,7 @@ export const refreshDivisionMonth = async (divisionId, month) => {
 export const queueOperationsRefresh = (divisionId, month) => {
   if (!mongoose.isValidObjectId(divisionId) || !month) return;
   setTimeout(() => {
-    refreshDivisionMonth(divisionId, month).catch((error) => console.error("Operations KPI refresh failed:", error));
+    refreshDivisionMonth(divisionId, month).catch(() => console.error("Operations KPI refresh failed."));
   }, 0);
 };
 
@@ -393,8 +393,8 @@ export const queueOperationsRangeRefresh = (divisionId, from) => {
       if (!division) return;
       const to = monthInTimezone(division.timezone);
       if (from <= to) await computeOperationsRange({ divisions: [division], from, to, reconcileCaps: true });
-    } catch (error) {
-      console.error("Operations KPI range refresh failed:", error);
+    } catch {
+      console.error("Operations KPI range refresh failed.");
     }
   }, 0);
 };

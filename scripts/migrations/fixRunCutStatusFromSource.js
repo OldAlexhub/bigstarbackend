@@ -90,7 +90,7 @@ const run = async () => {
   process.exit(0);
 };
 
-run().catch((error) => {
-  console.error("Fix failed:", error);
+run().catch(() => {
+  console.error("Fix failed.");
   process.exit(1);
 });

@@ -41,6 +41,20 @@ test("Company Outlook remains ELT-only", () => {
   assert.equal(denied.body.message, "ELT access required");
 });
 
+test("a non-ELT Settings writer still cannot change retention configuration", () => {
+  const user = {
+    role: "Manager",
+    pageAccessConfigured: true,
+    pageAccess: ["settings.general"],
+    pageAccessLevels: { "settings.general": "write" },
+  };
+  let reachedRetentionUpdate = false;
+  requirePageWrite("settings.general")({ user }, response(), () => {
+    requireELT({ user }, response(), () => { reachedRetentionUpdate = true; });
+  });
+  assert.equal(reachedRetentionUpdate, false);
+});
+
 test("configured page access allows one tab without opening its sibling tabs", () => {
   const user = {
     role: "Coordinator",

@@ -269,12 +269,12 @@ export const applyDueReallocations = async () => {
     try {
       const result = await approveOrApplyReallocation(request._id);
       if (result.applied) applied += 1;
-    } catch (error) {
+    } catch {
       await ReallocationRequest.updateOne(
         { _id: request._id, status: "approved" },
-        { $set: { applicationError: error.message || "Automatic application failed." } }
+        { $set: { applicationError: "Automatic application failed." } }
       );
-      console.error(`Reallocation request ${request._id} could not be applied:`, error.message);
+      console.error(`Reallocation request ${request._id} could not be applied.`);
     }
   }
 

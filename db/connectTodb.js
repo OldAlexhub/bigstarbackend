@@ -6,7 +6,7 @@ const connectToDb = async (mongoUrl = process.env.MONGO_URL) => {
   if (!mongoUrl?.trim()) throw new Error("MONGO_URL is required.");
 
   const connection = await mongoose.connect(mongoUrl);
-  console.log(`MongoDB connected: ${connection.connection.host}`);
+  console.log("MongoDB connected.");
   return connection.connection;
 };
 
