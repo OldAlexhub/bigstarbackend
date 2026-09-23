@@ -58,6 +58,8 @@ const NETWORK_RAW_FIELDS = [
   { key: "reportedRevenueHours", label: "Reported Revenue Hours", width: 24, format: number },
   { key: "tpsh", label: "Uploaded TPSH", width: 16, format: number },
   { key: "otpPct", label: "Uploaded OTP", width: 16, format: pct },
+  { key: "pickupOtpPct", label: "Pickup OTP", width: 16, format: pct },
+  { key: "dropoffOtpPct", label: "Dropoff OTP", width: 16, format: pct },
   { key: "zeroTrips", label: "Zero Trips", width: 12, format: (value) => value ? "Yes" : "No" },
 ];
 
@@ -90,7 +92,7 @@ export const REPORT_SOURCES = {
   network_raw: {
     key: "network_raw",
     label: "Network Success raw performance",
-    description: "One row per confirmed source row from Vision, Ecolane, or Spare, without rollups, scoring, or analysis.",
+    description: "One row per confirmed source row from Vision, Ecolane, Spare, or RideCo, without rollups, scoring, or analysis.",
     fields: NETWORK_RAW_FIELDS,
     defaultFields: [
       "divisionName",
@@ -143,7 +145,7 @@ export const normalizeReportBuilderConfig = (query = {}) => {
       ? query.focus
       : "all",
     issueType: issueFilterValues.has(query.issueType) ? query.issueType : "all",
-    networkSource: ["all", "vision", "ecolane", "spare"].includes(query.networkSource) ? query.networkSource : "all",
+    networkSource: ["all", "vision", "ecolane", "spare", "rideco"].includes(query.networkSource) ? query.networkSource : "all",
     sort,
     direction: query.direction === "desc" ? "desc" : "asc",
     title: safeString(query.title, 80) || (
@@ -193,6 +195,8 @@ export const rawNetworkRowsFromEntries = (entries = [], divisions = []) => {
       reportedRevenueHours: component.reportedRevenueHours,
       tpsh: component.tpsh,
       otpPct: component.otpPct,
+      pickupOtpPct: component.pickupOtpPct,
+      dropoffOtpPct: component.dropoffOtpPct,
       zeroTrips: Boolean(component.zeroTrips),
     }));
   });

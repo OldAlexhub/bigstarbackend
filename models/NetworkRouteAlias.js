@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const networkRouteAliasSchema = new mongoose.Schema(
   {
     division: { type: mongoose.Schema.Types.ObjectId, ref: "Division", required: true },
-    source: { type: String, enum: ["vision", "ecolane", "spare"], required: true },
+    source: { type: String, enum: ["vision", "ecolane", "spare", "rideco"], required: true },
     normalizedSourceRoute: { type: String, required: true },
     sourceRoute: { type: String, required: true },
     route: { type: mongoose.Schema.Types.ObjectId, ref: "Route", required: true },

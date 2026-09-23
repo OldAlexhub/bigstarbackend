@@ -89,7 +89,7 @@ export const saveOperationsKpiSetting = async (req, res) => {
       },
       $setOnInsert: { createdBy: req.user._id },
     },
-    { upsert: true, new: true, runValidators: true }
+    { upsert: true, returnDocument: "after", runValidators: true }
   ).populate("assignedManager", "name role");
   if (manager) {
     const unassignedCaps = await CorrectiveActionPlan.find({ division, kpiKey, activeEpisode: true, assignedManager: null });

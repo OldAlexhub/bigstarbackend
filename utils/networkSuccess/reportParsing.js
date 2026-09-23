@@ -15,6 +15,20 @@ export const readFirstSheet = (buffer) => {
   });
 };
 
+export const readNamedSheet = (buffer, names, description) => {
+  const workbook = XLSX.read(buffer, { type: "buffer", raw: true, cellDates: false });
+  const accepted = new Set(names.map((name) => name.trim().toLowerCase()));
+  const sheetName = workbook.SheetNames.find((name) => accepted.has(name.trim().toLowerCase()));
+  if (!sheetName) {
+    throw new Error(`The workbook does not contain the ${description} worksheet.`);
+  }
+  return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], {
+    header: 1,
+    raw: true,
+    defval: null,
+  });
+};
+
 export const findRow = (grid, predicate) => grid.findIndex((row, index) => predicate(row || [], index));
 
 export const findColumn = (row, patterns, description, { preferLast = false } = {}) => {

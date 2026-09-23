@@ -3,6 +3,11 @@ export const normalizeRouteCode = (value) =>
     .toUpperCase()
     .trim()
     .replace(/^BST/, "")
+    // Source systems report the revenue shift number without BigStar's
+    // roster-only standby marker (for example 3021 vs 3021(STBY)). Treat a
+    // terminal, delimited STBY/STANDBY label as metadata, not route identity.
+    // Codes such as STBY-1 are unaffected because the marker is not terminal.
+    .replace(/[\s([_-]+(?:STBY|STANDBY)[\s)\]_-]*$/i, "")
     .replace(/[^A-Z0-9]/g, "");
 
 const letterDeletionDistance = (a, b) => {

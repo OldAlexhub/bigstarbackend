@@ -4,6 +4,7 @@ import XLSX from "xlsx";
 import { parseVisionReport } from "./parseVisionReport.js";
 import { parseEcolaneReports } from "./parseEcolaneReports.js";
 import { parseSpareReport } from "./parseSpareReport.js";
+import { parseRideCoReports } from "./parseRideCoReports.js";
 import { aggregateResolvedRows } from "./aggregateRows.js";
 import { normalizeRouteCode, resolveRoute } from "./routeMatching.js";
 import { enrichGroup, resolvePerformanceRunCut, withPerformanceAssignment } from "../../controllers/networkSuccessSubmissionsController.js";
@@ -13,6 +14,14 @@ import { buildPerformanceAnalysis } from "./performanceAnalysis.js";
 const workbook = (rows, name = "Report") => {
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), name);
+  return XLSX.write(book, { type: "buffer", bookType: "xlsx" });
+};
+
+const workbookWithSheets = (sheets) => {
+  const book = XLSX.utils.book_new();
+  for (const [name, rows] of Object.entries(sheets)) {
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), name);
+  }
   return XLSX.write(book, { type: "buffer", bookType: "xlsx" });
 };
 
@@ -121,6 +130,40 @@ test("Spare parser reads a real CSV buffer directly, not just a converted workbo
   assert.ok(Math.abs(parsed.rows[1].otpPct - 0.909090909090909) < 1e-9);
 });
 
+test("RideCo parser joins shift/operator rows and derives TPSH from completed rides and Total Online Hours", () => {
+  const hours = workbook([
+    ["Program", "Date", "Driver", "Full Name", "Shift", "Total Online Hours", "Vehicle Revenue Hours"],
+    ["MARTA Mobility", "2026-08-01", "Operator One", "Operator One", "3500", 10, 8.5],
+    ["", "", "Operator Two", "Operator Two", "3501", 5, 4.25],
+  ], "9.0 Shift Hours Mileage Report");
+  const otp = workbookWithSheets({
+    Summary: [["Summary"]],
+    "By Shifts": [
+      ["Provider", "Agenda Day", "Shift Label", "Pickup OTP (%)", "Dropoff OTP (%)", "PVH", "Completed Rides", "Driver Name"],
+      ["MARTA Mobility - Big Star", "2026-08-01", "3500", 0.75, 1, 99, 8, "Operator One"],
+      ["", "", "9999", 1, 1, 99, 7, ""],
+    ],
+  });
+
+  const parsed = parseRideCoReports(hours, otp);
+
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].date, "2026-08-01");
+  assert.equal(parsed.rows[0].sourceRoute, "3500");
+  assert.equal(parsed.rows[0].sourceOperator, "Operator One");
+  assert.equal(parsed.rows[0].completedTrips, 8);
+  assert.equal(parsed.rows[0].reportedServiceHours, 10);
+  assert.equal(parsed.rows[0].reportedRevenueHours, 8.5);
+  assert.equal(parsed.rows[0].tpsh, 0.8);
+  assert.equal(parsed.rows[0].pickupOtpPct, 0.75);
+  assert.equal(parsed.rows[0].dropoffOtpPct, 1);
+  assert.equal(parsed.rows[0].otpPct, 0.875);
+  assert.match(parsed.rows[0].sourceFields.tpsh, /Total Online Hours/);
+  assert.equal(parsed.rows[1].tpsh, null);
+  assert.match(parsed.warnings.join(" "), /did not match a Shift Hours Mileage row/);
+  assert.match(parsed.warnings.join(" "), /TPSH is unavailable/);
+});
+
 test("Ecolane parser handles repeated headers and blocks an incomplete whole date", () => {
   const header = [null, "Run", "Trips", null, null, null, null, "Source", null, null, "Service", null, null, null, null, "Revenue"];
   const child = [null, null, "Comp"];
@@ -157,7 +200,22 @@ test("route matching uses exact, alias, and only safe unique letter differences"
     { _id: "3", code: "1101", type: "standard" },
   ];
   assert.equal(normalizeRouteCode(" bst 1029-b "), "1029B");
+  assert.equal(normalizeRouteCode("3021(STBY)"), "3021");
+  assert.equal(normalizeRouteCode("STBY-1"), "STBY1", "a standby prefix remains part of the route identity");
   assert.equal(resolveRoute("1029B", routes).method, "normalized_exact");
+  assert.equal(
+    resolveRoute("3021", [{ _id: "standby-3021", code: "3021(STBY)", type: "standby" }]).method,
+    "normalized_exact",
+    "a source shift matches its roster route when only the standby suffix differs"
+  );
+  assert.equal(
+    resolveRoute("3021", [
+      { _id: "standard-3021", code: "3021", type: "standard" },
+      { _id: "standby-3021", code: "3021(STBY)", type: "standby" },
+    ]).method,
+    "ambiguous",
+    "two roster routes with the same base code still require review"
+  );
   assert.equal(resolveRoute("1037A", routes).method, "safe_letter_difference");
   assert.equal(resolveRoute("1038A", routes).route, null, "digit changes never auto-match");
   assert.equal(resolveRoute("1037B", [{ _id: "x", code: "1037A", type: "standard" }]).route, null, "letter substitutions never auto-match");

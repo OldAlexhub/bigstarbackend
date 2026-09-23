@@ -179,7 +179,7 @@ const run = async () => {
         type: isStandby ? "standby" : "standard",
         thresholds,
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
     divisionDocByCode.set(code, doc);
   }
@@ -203,7 +203,7 @@ const run = async () => {
     const doc = await Route.findOneAndUpdate(
       { division: division._id, code: routeCode },
       { division: division._id, code: routeCode },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
     routeDocByKey.set(key, doc);
   }
@@ -214,7 +214,7 @@ const run = async () => {
     const doc = await Operator.findOneAndUpdate(
       { name },
       { name },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
     operatorDocByName.set(name, doc);
   }
@@ -226,7 +226,7 @@ const run = async () => {
     const doc = await Vehicle.findOneAndUpdate(
       { division: division._id, code: vehicleCode },
       { division: division._id, code: vehicleCode },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: "after" }
     );
     vehicleDocByKey.set(key, doc);
   }

@@ -10,6 +10,8 @@ const componentSchema = new mongoose.Schema(
     reportedRevenueHours: { type: Number, default: null },
     tpsh: { type: Number, default: null },
     otpPct: { type: Number, default: null },
+    pickupOtpPct: { type: Number, default: null },
+    dropoffOtpPct: { type: Number, default: null },
     zeroTrips: { type: Boolean, default: false },
     matchMethod: { type: String, default: null },
     manuallyResolved: { type: Boolean, default: false },
@@ -34,7 +36,7 @@ const assignmentOverrideSchema = new mongoose.Schema(
 const networkKpiEntrySchema = new mongoose.Schema(
   {
     division: { type: mongoose.Schema.Types.ObjectId, ref: "Division", required: true },
-    source: { type: String, enum: ["vision", "ecolane", "spare"], required: true },
+    source: { type: String, enum: ["vision", "ecolane", "spare", "rideco"], required: true },
     date: { type: String, required: true },
     route: { type: mongoose.Schema.Types.ObjectId, ref: "Route", required: true },
     submission: { type: mongoose.Schema.Types.ObjectId, ref: "NetworkSubmission", required: true },

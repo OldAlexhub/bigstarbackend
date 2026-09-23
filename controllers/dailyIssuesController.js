@@ -23,7 +23,7 @@ const promoteAutoIssue = (issueId, notes, userId) =>
   DailyIssueLog.findOneAndUpdate(
     { _id: issueId, autoSyncTag: { $ne: null } },
     { $set: { autoSyncTag: null, notes, createdBy: userId } },
-    { new: true }
+    { returnDocument: "after" }
   );
 
 const loadReportRows = async (req) => {

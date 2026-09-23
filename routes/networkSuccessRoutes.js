@@ -21,8 +21,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 2 },
   fileFilter: (_req, file, callback) => {
-    // Vision and Ecolane are strictly .xls/.xlsx workbooks; Spare's export
-    // is a .csv, accepted only under its own field name.
+    // Workbook sources are strictly .xls/.xlsx; Spare's export is a .csv,
+    // accepted only under its own field name.
     const accepted = file.fieldname === "spare" ? csvExtension : excelExtension;
     if (!accepted.test(file.originalname)) {
       return callback(
@@ -40,6 +40,8 @@ const receiveWorkbooks = (req, res, next) => {
     { name: "productivity", maxCount: 1 },
     { name: "driverPerformance", maxCount: 1 },
     { name: "spare", maxCount: 1 },
+    { name: "ridecoHours", maxCount: 1 },
+    { name: "ridecoOtp", maxCount: 1 },
   ])(req, res, (error) => {
     if (!error) return next();
     if (error.code === "LIMIT_FILE_SIZE") return res.status(413).json({ message: "Each workbook must be 10 MB or smaller." });

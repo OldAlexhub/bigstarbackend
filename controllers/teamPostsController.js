@@ -112,7 +112,7 @@ export const respondToTeamPost = async (req, res) => {
         responseSeenBy: [],
       },
     },
-    { new: true, runValidators: true }
+    { returnDocument: "after", runValidators: true }
   );
   if (!updated) return res.status(409).json({ message: "This post has already received a response." });
   const post = await populatePost(TeamPost.findById(updated._id));
